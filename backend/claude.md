@@ -66,7 +66,7 @@ backend/
 - Alembic is the source of truth for schema changes. Do not change production tables manually in the Supabase dashboard.
 - SQLAlchemy models describe normal tables and columns. Alembic autogenerate creates candidate migrations, but every generated migration must be reviewed before applying.
 - Supabase/Postgres-specific features belong in explicit migration operations: `create extension vector`, generated `tsvector` columns, HNSW/GIN indexes, RLS enablement, and RLS policies.
-- Alembic must use the direct/session database connection, not the Supabase transaction pooler URL.
+- Alembic must use a **session-level** connection: the session pooler (port `5432`) or the direct connection (`db.<ref>.supabase.co:5432`). Never the transaction pooler (port `6543`) — migrations, extension setup, and index creation need session-level behaviour.
 - Run migrations from `backend/` with `uv run alembic upgrade head`.
 
 ## Tests

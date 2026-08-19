@@ -60,7 +60,9 @@ Alembic migrations create and update:
 - chat and citation tables
 - row-level security policies
 
-Use the direct/session database connection string for Alembic. Do not use the transaction pooler connection string for migrations.
+Use a session-level connection string for Alembic: the **session pooler** (`...pooler.supabase.com:5432`) or the **direct** connection (`db.<ref>.supabase.co:5432`). Never the **transaction pooler** (`...pooler.supabase.com:6543`) — it cannot run migrations, extension setup, or index creation.
+
+The hostname alone does not tell you which mode you have; the **port** does. `5432` is session mode, `6543` is transaction mode. Note that direct connections are IPv6-only on newer Supabase projects unless you add the IPv4 add-on, so the session pooler is often the practical choice.
 
 From `backend/`:
 

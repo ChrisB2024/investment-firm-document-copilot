@@ -316,7 +316,7 @@ Normal tables and ordinary indexes should be represented in SQLAlchemy models wh
 - RLS enablement and policies
 - grants or Supabase role-specific permissions
 
-Alembic must connect with Supabase's direct/session database connection string. Do not run migrations through the transaction pooler URL, because schema migrations, extension setup, and index creation require session-level database behavior.
+Alembic must connect over a session-level connection: the session pooler (port `5432`) or the direct connection (`db.<ref>.supabase.co:5432`). Never the transaction pooler (port `6543`), because schema migrations, extension setup, and index creation require session-level database behavior. The port distinguishes the two modes, not the hostname — both pooler modes share a host.
 
 ## Grounding and Citation Policy
 

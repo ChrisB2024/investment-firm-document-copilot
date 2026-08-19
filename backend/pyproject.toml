@@ -2,8 +2,37 @@
 name = "document-copilot-backend"
 version = "0.1.0"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "alembic==1.19.1",
+    "fastapi==0.141.1",
+    "httpx==0.28.1",
+    "openai==3.0.0",
+    "pgvector==0.5.0",
+    "psycopg[binary]==3.3.4",
+    "pydantic==2.13.4",
+    "pydantic-ai==2.28.0",
+    "pydantic-settings==2.15.0",
+    "sqlalchemy==2.0.52",
+    "structlog==26.1.0",
+    "supabase==2.31.0",
+    "uvicorn==0.52.1",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# Installs `app/` as an editable package so `from app...` resolves from uvicorn,
+# pytest, notebooks, and IDE run buttons — not just from the backend/ cwd.
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
 
 [tool.uv]
 add-bounds = "exact"
 exclude-newer = "7 days"
+
+[dependency-groups]
+dev = [
+    "pytest==9.1.1",
+    "ruff==0.16.2",
+]
