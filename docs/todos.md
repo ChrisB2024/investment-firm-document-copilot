@@ -95,22 +95,38 @@ RLS is the exception it cannot see at all — autogenerate never compares
 
 ## Phase 2 — Ingestion
 
-Goal: the 25 downloaded 10-Ks are in Postgres as embedded, searchable chunks. This is the phase that
-decides whether the product works — spend the time here.
+Goal: the 25 downloaded 10-Ks are in Postgres as embedded, searchable chunks. This is the phase
+that decides whether the product works — spend the time here.
 
-- [ ] `ingest/extract.py` — SEC HTML → normalized Markdown. Drop nav/XBRL noise, keep tables in a
-      readable form, keep a byte offset per block so citations can point back.
-- [ ] `ingest/chunk.py` — split Markdown into ~500–800 token chunks with overlap, never splitting a
-      table mid-row. Carry metadata: ticker, company, filing type, filing date, fiscal year,
-      accession number, section heading, chunk index, source offsets.
-- [ ] `ingest/embed.py` — batch chunks to OpenAI embeddings (batch, don't loop one-by-one); retry on
-      rate limit.
-- [ ] `ingest/run.py` — CLI: read `data/downloads/manifest.json`, insert `source_documents` +
-      `document_chunks`, idempotent by accession number (re-running replaces, not duplicates).
+What the corpus is, measured rather than assumed:
+
+- Inline XBRL from filing agents. 1.5–6.5 MB each, mostly markup (one Apple filing has 11,098
+  inline `style` attributes, 963 `ix:nonfraction` tags).
+- **No `<h1>`–`<h6>` anywhere.** Headings are bold `<span>`s; structure must come from text.
+- `ix:hidden` holds non-rendering XBRL facts — strip it or numbers duplicate without context.
+- Every filing opens with a TOC whose entries read exactly like real headings. TOC entries sit
+  inside `<a href>`; real headings do not. That is the whole distinction.
+- Prose cross-references items too ("...discussed in Part I, Item 1A..."), so a heading must be a
+  short standalone block, not any line containing "Item 1A".
+- Table cells split values: `$` / `201,183` / `(2)` / `%` are four separate `<td>`s.
+
+Heading detection is verified across all 25 filings — 17–20 Items each, no misses, no TOC bleed.
+Section bodies come out as clean prose (Apple 2024 Item 1A = 68,735 chars; Item 1B = "None.").
+
+- [x] `lxml` and `tiktoken` added. HTML parsing and BPE tokenisation are both in the
+      "genuinely hard to get right" category the dependency policy allows.
+- [x] `ingest/` scaffolded with the validated selectors and heuristics.
+- [ ] `ingest/extract.py` — HTML → sections, tables, normalized Markdown.
+- [ ] `ingest/chunk.py` — ~700 token chunks with overlap, split on paragraph boundaries,
+      never mid-sentence and never mid-table-row. Prepend the section heading to every chunk;
+      a chunk that does not name its company and section is unfindable and uncitable.
+- [ ] `ingest/embed.py` — batch to OpenAI, preserve input order (results are zipped back
+      positionally, so a reorder silently mislabels every passage), retry on rate limits.
+- [ ] `ingest/run.py` — CLI over `manifest.json`, idempotent by accession number.
 - [ ] Tests: chunk boundaries, metadata propagation, idempotency. No network.
 
-**Done when:** all 25 filings ingested; a spot check on Apple FY2024 shows chunks whose text you can
-find in the original filing, with correct ticker/year/section metadata.
+**Done when:** all 25 filings ingested; a spot check on Apple FY2024 shows chunks whose text you
+can find in the original filing, with correct ticker/year/section metadata.
 
 ---
 
