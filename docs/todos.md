@@ -12,24 +12,30 @@ for what the answers must satisfy.
 
 Goal: both services boot, config fails loudly, Supabase project exists.
 
-Scaffolded — files exist with TODOs, implementation is yours:
-
 - [x] Supabase project created; `backend/.env` + `frontend/.env` filled.
 - [x] Backend deps installed; `[build-system]` + hatch wheel target added, so
       `from app...` resolves from any cwd.
 - [x] Frontend scaffolded: Vite + React 19 + TS strict, Tailwind v4, shadcn (radix/nova),
-      React Router, `@/*` alias. `pnpm build` and `pnpm lint` pass.
-- [ ] `backend/app/config.py` — fill in the four TODOs: `model_config`, `allowed_origins`
-      parsing, transaction-pooler guard, `alembic_url` driver, and the settings singleton.
-- [ ] `backend/app/main.py` — fill in CORS wiring, `/health`, structlog setup.
-- [ ] `frontend/src/lib/env.ts` — implement `loadEnv()`; report all missing vars at once.
-- [ ] Import `env` somewhere real so a missing var actually fails the boot — an unimported
-      module never runs.
-- [ ] Fix stale `../AGENTS.md` links in `claude.md` / `backend/claude.md` / `frontend/claude.md`
-      (9 references, incl. `README.md`).
+      React Router, `@/*` alias.
+- [x] `backend/app/config.py` — settings load from `.env` regardless of cwd, secrets as
+      `SecretStr`, comma-separated `ALLOWED_ORIGINS` via `NoDecode`, transaction-pooler
+      (`:6543`) rejected at boot, `alembic_url` names the `psycopg` driver.
+- [x] `backend/app/main.py` — CORS from `settings.allowed_origins` with credentials;
+      `/health` as a pure liveness probe.
+- [x] `frontend/src/lib/env.ts` — `loadEnv()` validates and trims all three vars and
+      reports every missing one in a single error.
+- [x] `env` imported in `main.tsx` for its side effect, so the check actually runs.
+- [x] `backend/README.md` — setup, config, migrations, troubleshooting.
 
-**Done when:** `uv run uvicorn app.main:app --reload` serves `/health`, `pnpm dev` serves a page,
-and deleting a required env var crashes each on boot.
+**Done when:** ~~`uv run uvicorn app.main:app --reload` serves `/health`, `pnpm dev` serves a
+page, and deleting a required env var crashes each on boot.~~ **Met.**
+
+Deferred out of Phase 0 (neither blocks Phase 1):
+
+- [ ] structlog configuration in `main.py` — nothing logs structurally yet, so this lands
+      with the first real request path in Phase 5.
+- [ ] Fix stale `../AGENTS.md` links — 9 references across `README.md`, `claude.md`,
+      `backend/claude.md`, `frontend/claude.md`. The files are now `claude.md`.
 
 ---
 
@@ -37,18 +43,42 @@ and deleting a required env var crashes each on boot.
 
 Goal: the tables retrieval needs exist in Supabase, created by Alembic.
 
-- [ ] `app/database/models.py` — SQLAlchemy models: `profiles`, `chat_threads`, `chat_messages`,
-      `message_citations`, `source_documents`, `document_chunks`.
-- [ ] ~~`uv run alembic init alembic`~~ (done — still stock boilerplate); point `env.py` at the models' metadata and
-      `settings.database_url` (session pooler on `5432` or direct — **never** the transaction pooler on `6543`).
+- [x] `alembic/env.py` reads the URL from `settings.alembic_url`, points `target_metadata`
+      at `Base.metadata`, sets `compare_type=True`, and filters Supabase's `auth` schema
+      out of autogenerate via `include_object`.
+- [x] `alembic.ini`'s placeholder `sqlalchemy.url` removed — the file is tracked in git.
+- [x] Seven models, one per file, under `app/database/`: `user`, `chat_thread`,
+      `chat_message`, `message_citation`, `source_document`, `document_chunk`,
+      `document_table`. `base.py` holds `Base` + constraint naming convention;
+      `models.py` imports all of them so Alembic can see them.
+- [x] Integrity constraints: unique `accession_number`, unique
+      `(document_id, chunk_index)`, unique `(thread_id, sequence)`, unique `email`,
+      and a `role` CHECK backed by `MessageRole`.
+- [x] Indexes on every foreign key, plus `(user_id, created_at DESC)` for the thread
+      sidebar query.
+- [x] `users.id` references `auth.users(id)` ON DELETE CASCADE. `supabase_auth.py`
+      declares the stub that makes the cross-schema FK compile.
 - [ ] First migration, hand-edited after autogenerate:
-  - [ ] `create extension if not exists vector`
-  - [ ] `document_chunks.embedding vector(1536)`
+  - [ ] `create extension if not exists vector` — **first statement in `upgrade()`**,
+        before any `vector(1536)` column is created
   - [ ] generated `tsvector` column over chunk text
-  - [ ] HNSW index on `embedding`, GIN index on the tsvector and on `metadata`
-  - [ ] unique constraint on `(document_id, chunk_index)`
-- [ ] Decide RLS now: backend uses the service-role key, so either enable RLS with deny-all and rely
-      on backend scoping, or leave it off deliberately. Write the choice in a comment.
+  - [ ] HNSW index on `embedding`, GIN index on the tsvector and on `chunk_metadata`
+- [ ] Decide RLS: the backend uses the service-role key, so either enable RLS with
+      deny-all and rely on backend scoping, or leave it off deliberately. Write down
+      which and why.
+
+Verified against the live database: all seven tables create, the cross-schema FK
+rejects a user id with no matching auth user, and a duplicate `accession_number` is
+rejected.
+
+Notes:
+
+- `uv run alembic check` reports pending changes without writing a migration file.
+- `metadata.create_all()` ignores the `include_object` filter, so any test fixture
+  building the schema must pass
+  `tables=[t for t in Base.metadata.sorted_tables if t.schema != "auth"]`.
+- Migrations now require a database that has Supabase Auth installed; a plain
+  Postgres will fail on the `auth.users` foreign key.
 
 **Done when:** `uv run alembic upgrade head` against Supabase succeeds from a clean DB, and
 `upgrade head` on an already-migrated DB is a no-op.
