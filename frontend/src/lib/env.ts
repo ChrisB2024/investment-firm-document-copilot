@@ -12,16 +12,34 @@ export type Env = {
   supabaseAnonKey: string
 }
 
-// TODO: read the three VITE_ vars and throw if any is missing or empty.
-//
-// Two things worth getting right:
-//   1. Report ALL missing vars in one error, not just the first — otherwise
-//      setting up a new machine is a game of whack-a-mole.
-//   2. Vite statically replaces `import.meta.env.VITE_X` at build time, so you
-//      must write the property access literally. Looping over a list of names
-//      and indexing dynamically will silently produce undefined in the build.
+// The three accesses below are written out literally on purpose: Vite replaces
+// `import.meta.env.VITE_X` at build time, so indexing it dynamically yields
+// undefined in the production bundle.
 function loadEnv(): Env {
-  throw new Error('TODO: implement loadEnv')
+  const missing: string[] = []
+
+  const req = (name: string, value: unknown): string => {
+    const trimmed = typeof value === 'string' ? value.trim() : ''
+    if (trimmed !== '') return trimmed
+    missing.push(name)
+    return ''
+  }
+
+  const parsed: Env = {
+    apiBaseUrl: req('VITE_API_BASE_URL', import.meta.env.VITE_API_BASE_URL),
+    supabaseUrl: req('VITE_SUPABASE_URL', import.meta.env.VITE_SUPABASE_URL),
+    supabaseAnonKey: req('VITE_SUPABASE_ANON_KEY', import.meta.env.VITE_SUPABASE_ANON_KEY),
+  }
+
+  if (missing.length > 0) {
+    throw new Error(
+      `Missing or empty environment variable(s): ${missing.join(', ')}. ` +
+        `Add them to frontend/.env (see .env.example) and restart — Vite only ` +
+        `reads .env files at startup.`
+    )
+  }
+
+  return parsed
 }
 
 export const env: Env = loadEnv()
