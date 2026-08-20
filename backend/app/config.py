@@ -7,19 +7,25 @@ Missing or malformed required vars must raise at import time, not at first
 request — a backend that boots with half its config is worse than one that
 refuses to boot.
 """
-
 from functools import cached_property
+from pathlib import Path
+from typing import Annotated
 
 from pydantic import PostgresDsn, SecretStr, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+# Module level, not class attributes: pydantic turns leading-underscore class
+# attributes into ModelPrivateAttr, so they are not plain values at runtime.
+_BACKEND_DIR = Path(__file__).resolve().parent.parent
+_TRANSACTION_POOLER_PORT = 6543
 
 
 class Settings(BaseSettings):
-    # TODO: point this at backend/.env, ignore unknown keys, and decide whether
-    # env var names are case-sensitive. Note the field names below are lowercase
-    # while .env uses SCREAMING_CASE — check which SettingsConfigDict option
-    # makes that mapping work before assuming it's automatic.
-    model_config = SettingsConfigDict()
+    model_config = SettingsConfigDict(
+        env_file=_BACKEND_DIR / ".env",
+        env_file_encoding="utf-8",
+        extra="ignore"
+    )
 
     # --- Supabase (Auth + API) ---
     supabase_url: str
@@ -33,46 +39,57 @@ class Settings(BaseSettings):
 
     # --- OpenAI ---
     openai_api_key: SecretStr
-    openai_embedding_model: str
-    openai_embedding_dimensions: int
+    openai_embedding_model: str = "text-embedding-3-small"
+    openai_embedding_dimensions: int = 1536
+    openai_chat_model: str = "gpt-5.5"
+    openai_grounding_model: str = "gpt-4.1-mini"
+    openai_agent_request_limit: int = 20
+    openai_agent_temperature: float = 0.0
+
+    # --- retrieval ---
+    retrieval_candidate_k: int = 50
+    retrieval_top_k: int = 10
+    retrieval_rrf_k: int = 60
+    retrieval_neighbor_radius: int = 1
+    retrieval_fts_config: str = "english"
+    retrieval_fts_keyword_model: str = "gpt-4.1-mini"
+    retrieval_fts_keyword_min: int = 3
+    retrieval_fts_keyword_max: int = 5
+    retrieval_fts_keyword_fast_path_tokens: int = 5
 
     # --- Server ---
     # Comma-separated in .env ("http://a,http://b"), a list here.
-    allowed_origins: list[str]
+    allowed_origins: Annotated[list[str], NoDecode]
 
-    # TODO: parse allowed_origins from the comma-separated string.
-    # Watch out: pydantic-settings tries to JSON-decode env values for complex
-    # types *before* your validator runs, so a bare comma-separated string will
-    # blow up unless you handle it. Look up `mode="before"` and, if that isn't
-    # enough, how to stop pydantic-settings from JSON-parsing this field.
     @field_validator("allowed_origins", mode="before")
     @classmethod
     def _split_origins(cls, value: object) -> object:
-        raise NotImplementedError
+        if isinstance(value, str):
+            return [origin.strip() for origin in value.split(",") if origin.strip()]
+        return value
 
-    # TODO: guard against the transaction pooler. Raise a clear error if the
-    # port is 6543 — this is the single most likely config mistake in this
-    # project and a validator here turns a confusing Alembic hang into a
-    # readable startup crash.
     @field_validator("database_url")
     @classmethod
     def _reject_transaction_pooler(cls, value: PostgresDsn) -> PostgresDsn:
-        raise NotImplementedError
+        if any(host["port"] == _TRANSACTION_POOLER_PORT for host in value.hosts()):
+            raise ValueError(
+                "DATABASE_URL uses port 6543 (Supabase transaction pooler), which "
+                "cannot run migrations or hold session state. Use port 5432 — the "
+                "session pooler or the direct connection string."
+            )
+        return value
 
     @cached_property
     def alembic_url(self) -> str:
         """SQLAlchemy-compatible URL for Alembic and direct DB access.
 
-        TODO: `psycopg` (v3) is installed, but a plain `postgresql://` URL makes
-        SQLAlchemy reach for psycopg2, which is not. Return the URL with the
-        driver SQLAlchemy should actually use.
+        The driver is named explicitly because a bare `postgresql://` URL makes
+        SQLAlchemy reach for psycopg2, which is not installed — psycopg v3 is.
         """
-        raise NotImplementedError
+        _, separator, rest = str(self.database_url).partition("://")
+        return f"postgresql+psycopg{separator}{rest}"
 
 
-# TODO: export a single instance the rest of the app imports.
-#
-# Decide deliberately between a module-level `settings = Settings()` and a
-# lazily-cached factory. Module-level is simpler and fails fast at import — but
-# it also means importing anything from `app` requires a valid environment,
-# which affects how tests and `alembic` behave. Pick one and know why.
+settings = Settings()
+
+__all__ = ["Settings", "settings"]
