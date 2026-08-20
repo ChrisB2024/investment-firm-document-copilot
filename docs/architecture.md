@@ -272,12 +272,15 @@ Streaming responsibilities:
 
 Supabase tables should be small and product-oriented:
 
-- `profiles`: one row per authenticated user, keyed by Supabase `auth.users.id`.
+- `users`: one row per authenticated user, keyed by Supabase `auth.users.id` with a
+  foreign key to it, so a row cannot exist for a user Supabase Auth does not know.
 - `chat_threads`: thread metadata, owner, title, timestamps.
 - `chat_messages`: user and assistant messages in order, with AI SDK-compatible message JSON where useful.
 - `message_citations`: normalized citation records linked to assistant messages.
 - `source_documents`: original document records with filing metadata, source URL, and normalized Markdown content.
 - `document_chunks`: chunk text, chunk metadata, embeddings, and generated full-text search vectors.
+- `document_tables`: full tables extracted from a filing, kept whole so financial
+  figures survive chunking intact.
 
 `source_documents` stores the normalized Markdown version of each filing so the application can re-chunk, inspect, and cite the original extracted text without reaching back into downloaded HTML files. `document_chunks` stores retrieval-ready passages:
 
