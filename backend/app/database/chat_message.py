@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import (
+    CheckConstraint,
     DateTime,
     Enum,
     ForeignKey,
@@ -33,6 +34,16 @@ class ChatMessage(Base):
         # Two messages cannot claim the same slot in a thread.
         UniqueConstraint("thread_id", "sequence"),
         Index("ix_chat_messages_thread_id", "thread_id"),
+        # Declared explicitly rather than via Enum(create_constraint=True):
+        # SQLAlchemy marks a type-bound constraint in a way autogenerate skips on
+        # the metadata side while still reflecting it from the database, so every
+        # future migration would try to drop it.
+        CheckConstraint(
+            f"role IN ({', '.join(repr(m.value) for m in MessageRole)})",
+            # Bare suffix: the "ck" naming convention expands this to
+            # ck_chat_messages_message_role.
+            name="message_role",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -43,15 +54,15 @@ class ChatMessage(Base):
         ForeignKey("chat_threads.id", ondelete="CASCADE"),
         nullable=False,
     )
-    # native_enum=False stores VARCHAR + a CHECK constraint rather than a Postgres
-    # ENUM type. Adding a role later (e.g. "tool") is then an ordinary migration,
-    # not an ALTER TYPE that fights Alembic's transaction.
+    # native_enum=False stores VARCHAR rather than a Postgres ENUM type. Adding a
+    # role later (e.g. "tool") is then an ordinary migration, not an ALTER TYPE
+    # that fights Alembic's transaction. The CHECK lives in __table_args__.
     role: Mapped[MessageRole] = mapped_column(
         Enum(
             MessageRole,
             name="message_role",
             native_enum=False,
-            create_constraint=True,
+            create_constraint=False,
             length=16,
             values_callable=lambda e: [m.value for m in e],
         ),
