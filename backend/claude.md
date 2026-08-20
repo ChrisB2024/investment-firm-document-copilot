@@ -41,7 +41,7 @@ backend/
 │   ├── assistant/       # PydanticAI agent, deps, outputs, instructions
 │   ├── retrieval/       # pgvector/full-text queries, RRF fusion, source passage lookup
 │   ├── grounding/       # citation validation and answer grounding checks
-│   ├── database/        # SQLAlchemy models, Supabase client wrapper, typed query helpers
+│   ├── database/        # one model per file + models.py aggregator, Supabase client, query helpers
 │   └── prompts/         # prompt/instruction templates if not colocated with assistant
 ├── ingest/              # one-off ingestion scripts (Markdown extraction, chunking, embedding, Supabase writes)
 ├── tests/
@@ -60,6 +60,20 @@ backend/
 - `app.config.settings` is the single source of truth. Import settings where needed; never call `os.getenv` in app code, never call `load_dotenv`.
 - If a third-party SDK reads `os.environ` directly, add the mirror in `config.py` — don't sprinkle `setdefault` elsewhere.
 - Fail fast on startup when required env vars are missing.
+
+## Database models
+
+- **One model per file**, named after the model (`user.py` -> `User`,
+  `document_chunk.py` -> `DocumentChunk`). `base.py` holds the shared `Base`.
+- `models.py` imports all of them and re-exports. SQLAlchemy only registers a table
+  once its module is imported, so a model no one imports is invisible to Alembic
+  autogenerate — the migration comes out empty with no error saying why. Anything
+  needing the full schema (`alembic/env.py`, tests) imports from `models.py`.
+- Adding a model means adding the file *and* the import in `models.py`.
+- `supabase_auth.py` declares a stub for Supabase's `auth.users` so cross-schema
+  foreign keys can compile. `alembic/env.py` filters the `auth` schema out of
+  autogenerate. `metadata.create_all()` does *not* honour that filter — pass
+  `tables=[t for t in Base.metadata.sorted_tables if t.schema != "auth"]`.
 
 ## Database migrations
 
