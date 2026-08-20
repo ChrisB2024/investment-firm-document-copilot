@@ -58,14 +58,16 @@ Goal: the tables retrieval needs exist in Supabase, created by Alembic.
       sidebar query.
 - [x] `users.id` references `auth.users(id)` ON DELETE CASCADE. `supabase_auth.py`
       declares the stub that makes the cross-schema FK compile.
-- [ ] First migration, hand-edited after autogenerate:
-  - [ ] `create extension if not exists vector` — **first statement in `upgrade()`**,
+- [x] First migration applied (`aed0df9ad92c`), hand-edited after autogenerate:
+  - [x] `create extension if not exists vector` — **first statement in `upgrade()`**,
         before any `vector(1536)` column is created
-  - [ ] generated `tsvector` column over chunk text
-  - [ ] HNSW index on `embedding`, GIN index on the tsvector and on `chunk_metadata`
-- [ ] Decide RLS: the backend uses the service-role key, so either enable RLS with
-      deny-all and rely on backend scoping, or leave it off deliberately. Write down
-      which and why.
+  - [x] generated `tsvector` column over chunk text
+  - [x] HNSW index on `embedding`, GIN index on the tsvector and on `chunk_metadata`
+- [x] RLS enabled deny-all (no policies) on all seven tables, in a migration rather
+      than by hand: Supabase exposes `public` through PostgREST using the anon key,
+      which ships in the browser bundle. The backend's service-role key bypasses RLS,
+      so this costs the app nothing. Verified: with a real row present, the anon key
+      reads `[]` while service-role sees it.
 
 Verified against the live database: all seven tables create, the cross-schema FK
 rejects a user id with no matching auth user, and a duplicate `accession_number` is
@@ -80,8 +82,14 @@ Notes:
 - Migrations now require a database that has Supabase Auth installed; a plain
   Postgres will fail on the `auth.users` foreign key.
 
-**Done when:** `uv run alembic upgrade head` against Supabase succeeds from a clean DB, and
-`upgrade head` on an already-migrated DB is a no-op.
+Anything created by hand in a migration must also be declared on the model, or
+autogenerate sees it only in the database and emits a DROP on the next revision.
+RLS is the exception it cannot see at all — autogenerate never compares
+`relrowsecurity`, so it lives only in the migration.
+
+**Done when:** ~~`uv run alembic upgrade head` against Supabase succeeds from a clean DB, and
+`upgrade head` on an already-migrated DB is a no-op.~~ **Met** — head is `b764413cd363`,
+`alembic check` reports no drift.
 
 ---
 
