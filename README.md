@@ -25,7 +25,7 @@ Full brief: [docs/client-brief.md](docs/client-brief.md)
 
 ```text
 document-copilot/
-├── AGENTS.md           # agent instructions (read first)
+├── claude.md           # agent instructions (read first)
 ├── README.md           # this file
 ├── data/               # local corpus + download script (payloads gitignored)
 ├── docs/

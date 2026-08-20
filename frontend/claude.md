@@ -1,6 +1,6 @@
 # Frontend — agent notes
 
-This is the React SPA for Document Copilot. Read [../AGENTS.md](../AGENTS.md) first — universal building rules live there. This file adds frontend-specific conventions.
+This is the React SPA for Document Copilot. Read [../claude.md](../claude.md) first — universal building rules live there. This file adds frontend-specific conventions.
 
 ## Stack
 
@@ -20,7 +20,7 @@ If a fresh package is genuinely required (e.g. urgent security fix in a dep we a
 
 ## Dependency policy
 
-See universal policy in [../AGENTS.md](../AGENTS.md). Frontend-specific:
+See universal policy in [../claude.md](../claude.md). Frontend-specific:
 
 - **HTTP:** use the native `fetch` API through a thin client in `src/lib/http.ts` and the `api` singleton in `src/lib/api.ts`. **No axios, ky, got, superagent, redaxios.**
 - **Dates:** use native `Date` and `Intl.DateTimeFormat`. No moment, dayjs, date-fns unless genuinely needed.

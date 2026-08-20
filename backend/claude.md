@@ -1,6 +1,6 @@
 # Backend — agent notes
 
-This is the FastAPI service for Document Copilot. Read [../AGENTS.md](../AGENTS.md) first — universal building rules live there. This file adds backend-specific conventions.
+This is the FastAPI service for Document Copilot. Read [../claude.md](../claude.md) first — universal building rules live there. This file adds backend-specific conventions.
 
 ## Stack
 
@@ -18,7 +18,7 @@ This is the FastAPI service for Document Copilot. Read [../AGENTS.md](../AGENTS.
 
 ## Dependency policy
 
-See universal policy in [../AGENTS.md](../AGENTS.md). Backend-specific:
+See universal policy in [../claude.md](../claude.md). Backend-specific:
 
 - **Prefer stdlib:** `pathlib`, `datetime`, `uuid`, `enum`, `dataclasses`, `asyncio`, `collections`, `itertools`, `json`, `urllib`.
 - **Not OK without justification:** `python-dateutil`, `toolz`, `funcy`, `more-itertools`, small JSON/string micro-libs, "ergonomic" wrappers on top of declared SDKs.
