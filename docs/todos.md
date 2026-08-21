@@ -116,12 +116,19 @@ Section bodies come out as clean prose (Apple 2024 Item 1A = 68,735 chars; Item 
 - [x] `lxml` and `tiktoken` added. HTML parsing and BPE tokenisation are both in the
       "genuinely hard to get right" category the dependency policy allows.
 - [x] `ingest/` scaffolded with the validated selectors and heuristics.
-- [ ] `ingest/extract.py` — HTML → sections, tables, normalized Markdown.
+- [x] `ingest/extract.py` — HTML → sections, tables, normalized Markdown. All 25 filings:
+      21-23 sections, 53-89 tables, every core item present, 5.1s.
 - [ ] `ingest/chunk.py` — ~700 token chunks with overlap, split on paragraph boundaries,
       never mid-sentence and never mid-table-row. Prepend the section heading to every chunk;
       a chunk that does not name its company and section is unfindable and uncitable.
-- [ ] `ingest/embed.py` — batch to OpenAI, preserve input order (results are zipped back
-      positionally, so a reorder silently mislabels every passage), retry on rate limits.
+- [x] `ingest/embed.py` — batches under both the input and token caps, reorders responses
+      by index (a reorder would otherwise mislabel every passage), verifies dimension and
+      count. Embeds chunks and tables through one path.
+- [x] Tables made a second retrievable source type: `document_tables` has its own
+      `embedding` and generated `search_vector`, with HNSW and GIN indexes (migration
+      `dedf64806f7f`). 46% of a filing's comma-formatted figures appear only inside a
+      table, so a chunk-only corpus cannot answer the brief's numeric questions.
+      Measured: 1,724 tables, median 177 tokens, max 1,762 — all fit the 8191 limit whole.
 - [ ] `ingest/run.py` — CLI over `manifest.json`, idempotent by accession number.
 - [ ] Tests: chunk boundaries, metadata propagation, idempotency. No network.
 

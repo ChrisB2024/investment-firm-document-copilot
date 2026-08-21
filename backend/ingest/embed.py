@@ -66,25 +66,41 @@ def _batches(chunks: list) -> Iterator[list]:
 
 
 async def embed_chunks(chunks: list) -> None:
-    """Embed chunks in batches, in place.
+    """Embed chunks in batches, in place."""
+    await _embed_items(chunks, lambda c: c.text, lambda c: c.chunk_index, "chunk")
 
-    Verify the returned vector length equals
-    `settings.openai_embedding_dimensions` before writing: the column is
-    vector(1536) and a mismatch fails at insert, but far more usefully it tells
-    you the model or dimension setting drifted.
+
+async def embed_tables(tables: list) -> None:
+    """Embed tables in batches, in place.
+
+    Tables are a second retrievable source type, not part of the chunk stream:
+    they are embedded whole so a multi-year row keeps the header naming its
+    years. `embed_text` mirrors the search_vector expression on document_tables
+    so semantic and lexical retrieval see the same text.
     """
-    blank = [c.chunk_index for c in chunks if not c.text.strip()]
+    await _embed_items(tables, lambda t: t.embed_text, lambda t: t.table_index, "table")
+
+
+async def _embed_items(items: list, text_of, index_of, label: str) -> None:
+    """Embed anything with a text and an index, in place.
+
+    Verifies the returned vector length equals
+    `settings.openai_embedding_dimensions`: the column is vector(1536) and a
+    mismatch fails at insert, but far more usefully it says which model and
+    which setting drifted.
+    """
+    blank = [index_of(i) for i in items if not text_of(i).strip()]
     if blank:
         raise ValueError(
-            f"chunk(s) {blank} have empty text; the embeddings endpoint rejects "
+            f"{label}(s) {blank} have empty text; the embeddings endpoint rejects "
             "empty input and would fail the entire batch."
         )
 
     expected = settings.openai_embedding_dimensions
     model = settings.openai_embedding_model
 
-    for batch in _batches(chunks):
-        vectors = await embed_texts([c.text for c in batch])
+    for batch in _batches(items):
+        vectors = await embed_texts([text_of(i) for i in batch])
 
         if len(vectors) != len(batch):
             raise RuntimeError(
@@ -92,13 +108,13 @@ async def embed_chunks(chunks: list) -> None:
                 f"got {len(vectors)} vectors from {model}"
             )
 
-        for chunk, vector in zip(batch, vectors, strict=True):
+        for item, vector in zip(batch, vectors, strict=True):
             if len(vector) != expected:
                 raise RuntimeError(
-                    f"embedding dimension mismatch on chunk {chunk.chunk_index}: "
+                    f"embedding dimension mismatch on {label} {index_of(item)}: "
                     f"expected {expected}, got {len(vector)} from {model}. "
                     "Model or openai_embedding_dimensions has drifted from the "
                     f"vector({expected}) column."
                 )
-            chunk.embedding = vector
+            item.embedding = vector
 
