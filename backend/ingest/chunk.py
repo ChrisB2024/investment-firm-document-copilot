@@ -38,6 +38,9 @@ class Chunk:
     page: str | None = None
     section: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    # Populated by ingest.embed. Nullable so a run that dies mid-embedding
+    # leaves chunks a re-run can finish, matching the nullable DB column.
+    embedding: list[float] | None = None
 
 
 @cache
