@@ -17,7 +17,7 @@ BATCH_SIZE = 100
 async def embed_texts(texts: Sequence[str]) -> list[list[float]]:
     """Embed a batch, preserving input order.
 
-    TODO: implement against the OpenAI SDK using
+    Uses the OpenAI SDK with
     `settings.openai_embedding_model` and `settings.openai_embedding_dimensions`.
 
     Order is a correctness requirement, not a nicety: results are zipped back
@@ -34,7 +34,7 @@ async def embed_texts(texts: Sequence[str]) -> list[list[float]]:
 async def embed_chunks(chunks: list) -> None:
     """Embed chunks in batches, in place.
 
-    TODO: implement. Verify the returned vector length equals
+    Verify the returned vector length equals
     `settings.openai_embedding_dimensions` before writing: the column is
     vector(1536) and a mismatch fails at insert, but far more usefully it tells
     you the model or dimension setting drifted.

@@ -19,14 +19,14 @@ MANIFEST = CORPUS_ROOT / "manifest.json"
 
 
 def parse_args() -> argparse.Namespace:
-    """TODO: implement --ticker, --year, --dry-run, --limit."""
+    """Supports --ticker, --year, --dry-run, --limit."""
     raise NotImplementedError
 
 
 def ingest_filing(entry: dict, *, dry_run: bool = False) -> None:
     """Extract, chunk, embed, and persist one filing.
 
-    TODO: implement, and make it idempotent. Re-running must replace, not
+    Must be idempotent. Re-running must replace, not
     duplicate: `accession_number` is unique, so upsert on it and delete the
     document's existing chunks before inserting new ones. Getting this wrong is
     silent — you end up with two copies of every passage and retrieval quietly
@@ -41,8 +41,8 @@ def ingest_filing(entry: dict, *, dry_run: bool = False) -> None:
 
 
 def main() -> None:
-    """TODO: implement. Report per-filing counts and a total at the end —
-    a silent success over 25 filings tells you nothing about what happened."""
+    """Reports per-filing counts and a total at the end — a silent success over
+    25 filings tells you nothing about what happened."""
     raise NotImplementedError
 
 
