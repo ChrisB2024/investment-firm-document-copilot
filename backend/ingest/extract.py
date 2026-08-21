@@ -184,8 +184,22 @@ def _heading_of(el) -> tuple[str, str] | None:
 
 
 def _scan(el, events: list) -> bool:
-    """Depth-first in document order. Returns True if this subtree held a block."""
-    is_block = _local(el) in BLOCK_TAGS
+    """Depth-first in document order. Returns True if this subtree held a block.
+
+    Tables are emitted as events rather than matched to sections afterwards.
+    A single ordered walk gives "the last heading before this table" for free,
+    where matching afterwards would have to rebuild it from document positions
+    across two independently parsed trees. Returning early also stops the walk
+    descending into the cells, which would otherwise dump uncoalesced figures
+    into the section's prose.
+    """
+    tag = _local(el)
+
+    if tag == "table":
+        events.append(("table", el))
+        return True
+
+    is_block = tag in BLOCK_TAGS
 
     if is_block:
         heading = _heading_of(el)
@@ -242,12 +256,24 @@ def extract(html_path: str) -> ExtractedFiling:
 
     sections: list[Section] = []
     buffers: list[list[str]] = []
-    for event in events:
-        if event[0] == "heading":
-            sections.append(Section(item=event[1], title=event[2], text=""))
+    tables: list[Table] = []
+    for kind, *payload in events:
+        if kind == "heading":
+            sections.append(Section(item=payload[0], title=payload[1], text=""))
             buffers.append([])
+        elif kind == "table":
+            # table_index runs filing-wide, not per section: the unique
+            # constraint is (document_id, table_index), so restarting per
+            # section would collide on the next section's first table.
+            table = _build_table(payload[0], len(tables))
+            if table is None:
+                continue
+            table.section = sections[-1].heading if sections else None
+            tables.append(table)
+            if sections:
+                sections[-1].tables.append(table)
         elif sections:
-            buffers[-1].append(event[1])
+            buffers[-1].append(payload[0])
 
     for section, parts in zip(sections, buffers, strict=True):
         section.text = "\n\n".join(parts)
@@ -261,7 +287,7 @@ def extract(html_path: str) -> ExtractedFiling:
         )
     return ExtractedFiling(
         sections=sections,
-        tables=extract_tables(html_path),
+        tables=tables,
         markdown=to_markdown(sections),
     )
 
@@ -339,39 +365,40 @@ def _to_markdown(rows: list[list[str]]) -> str:
     return "\n".join(lines)
        
 
-def extract_tables(html_path: str) -> list[Table]:
-    """Pull tables out whole, for `document_tables`.
+def _build_table(el, table_index: int) -> Table | None:
+    """Build one Table from a <table> element, or None if it is not tabular.
 
     Coalescing is the real work: a currency row arrives as
-    ["$", "201,183", "", "(2)", "%"] and has to render as "$201,183 (2)%".
-    Decide the rule once and apply it consistently, because these numbers are
-    what analysts will check the answer against.
+    ["$", "201,183", "", "(2)", "%"] and has to render as "$201,183 | (2)%".
+    These are the figures an analyst checks the answer against.
 
-    Carry `source_html_hash` (the model requires it) so a re-extraction can tell
-    whether a table actually changed.
+    `source_html_hash` ignores volatile presentation attributes so a
+    re-extraction can tell whether the content actually changed.
     """
-    root = lxml.html.parse(html_path).getroot()
-    _drop_tags(root)
+    # A table wrapping another is layout, not data; the inner one is the table.
+    if any(_local(d) == "table" for d in el.iterdescendants()):
+        return None
+    rows = _rows_of(el)
+    if len(rows) < MIN_TABLE_ROWS or max((len(r) for r in rows), default=0) < MIN_TABLE_COLS:
+        return None
+    title = _title_of(el)
+    return Table(
+        table_index=table_index,
+        title=title,
+        units=_units_of(title, _norm("".join(el.itertext()))),
+        markdown=_to_markdown(rows),
+        rows=rows,
+        source_html_hash=_table_hash(el),
+    )
 
-    tables: list[Table] = []
-    for el in root.iter():
-        if _local(el) != "table":
-            continue
-        if any(_local(d) == "table" for d in el.iterdescendants()):
-            continue
-        rows = _rows_of(el)
-        if len(rows) < MIN_TABLE_ROWS or max((len(r) for r in rows), default=0) < MIN_TABLE_COLS:
-            continue
-        title = _title_of(el)
-        tables.append(Table(
-            table_index=len(tables),
-            title=title,
-            units=_units_of(title, _norm("".join(el.itertext()))),
-            markdown=_to_markdown(rows),
-            rows=rows,
-            source_html_hash=_table_hash(el),
-        ))
-    return tables
+
+def extract_tables(html_path: str) -> list[Table]:
+    """Every table in a filing, in document order.
+
+    Thin wrapper: tables are built during the single walk in `extract`, so this
+    parses the file once rather than a second time alongside it.
+    """
+    return extract(html_path).tables
      
 
 _MD_HEADING = re.compile(r"^##\s+(.+)$")

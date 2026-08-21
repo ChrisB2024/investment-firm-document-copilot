@@ -117,7 +117,10 @@ Section bodies come out as clean prose (Apple 2024 Item 1A = 68,735 chars; Item 
       "genuinely hard to get right" category the dependency policy allows.
 - [x] `ingest/` scaffolded with the validated selectors and heuristics.
 - [x] `ingest/extract.py` — HTML → sections, tables, normalized Markdown. All 25 filings:
-      21-23 sections, 53-89 tables, every core item present, 5.1s.
+      21-23 sections, 1,724 tables, every core item present, contiguous table_index, 3.5s.
+      Tables are emitted as events in the single document-order walk, so each knows its
+      section by construction and the walk never descends into cells (raw-figure leakage
+      into prose: 35 chars across the whole corpus).
 - [ ] `ingest/chunk.py` — ~700 token chunks with overlap, split on paragraph boundaries,
       never mid-sentence and never mid-table-row. Prepend the section heading to every chunk;
       a chunk that does not name its company and section is unfindable and uncitable.
