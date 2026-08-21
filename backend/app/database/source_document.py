@@ -38,6 +38,10 @@ class SourceDocument(Base):
     primary_document: Mapped[str] = mapped_column(String(255), nullable=False)
     source_url: Mapped[str] = mapped_column(Text, nullable=False)
     markdown_content: Mapped[str | None] = mapped_column(Text)
+    # sha256 of the source file plus the extractor version. Lets a re-run skip
+    # re-parsing an unchanged filing and resume embedding where it stopped, and
+    # makes a parser fix invalidate every document by bumping the version.
+    content_hash: Mapped[str | None] = mapped_column(String(64))
     ingested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     chunks: Mapped[list[DocumentChunk]] = relationship(

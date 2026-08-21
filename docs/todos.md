@@ -132,7 +132,13 @@ Section bodies come out as clean prose (Apple 2024 Item 1A = 68,735 chars; Item 
       `dedf64806f7f`). 46% of a filing's comma-formatted figures appear only inside a
       table, so a chunk-only corpus cannot answer the brief's numeric questions.
       Measured: 1,724 tables, median 177 tokens, max 1,762 — all fit the 8191 limit whole.
-- [ ] `ingest/run.py` — CLI over `manifest.json`, idempotent by accession number.
+- [x] `ingest/run.py` — CLI over `manifest.json` with `--ticker/--year/--dry-run/--limit`,
+      idempotent by accession number and resumable via `source_documents.content_hash`
+      (migration `b13d3bb1bb88`). A failing filing does not abandon the rest.
+- [x] `app/database/session.py` — lazy async engine + session factory.
+- [x] `ingest/persist.py` — upsert-by-accession, replace chunks/tables, pending-embedding
+      queries. Verified: re-running writes nothing; bumping the extractor version
+      re-extracts and still leaves exactly one copy.
 - [ ] Tests: chunk boundaries, metadata propagation, idempotency. No network.
 
 **Done when:** all 25 filings ingested; a spot check on Apple FY2024 shows chunks whose text you

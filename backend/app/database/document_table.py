@@ -88,3 +88,15 @@ class DocumentTable(Base):
     )
 
     document: Mapped[SourceDocument] = relationship(back_populates="tables")
+
+    @property
+    def embed_text(self) -> str:
+        """What gets embedded. Mirrors ingest.extract.Table.embed_text.
+
+        Deliberately the same shape as the search_vector expression above, so
+        semantic and lexical retrieval see the same text and cannot disagree
+        about what this table says.
+        """
+        section = (self.table_data or {}).get("section")
+        parts = [p for p in (section, self.title, self.units) if p]
+        return "\n\n".join([*parts, self.markdown])

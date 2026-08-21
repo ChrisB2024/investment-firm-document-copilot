@@ -11,6 +11,7 @@ from collections.abc import Iterator, Sequence
 from openai import AsyncOpenAI
 
 from app.config import settings
+from ingest.chunk import token_count
 
 _client = AsyncOpenAI(
     api_key=settings.openai_api_key.get_secret_value(),
@@ -50,24 +51,31 @@ async def embed_texts(texts: Sequence[str]) -> list[list[float]]:
 
 MAX_BATCH_TOKENS = 200_000
 
-def _batches(chunks: list) -> Iterator[list]:
-    """Group chunks under both the per-request input cap and the token cap."""
+def _batches(items: list, tokens_of) -> Iterator[list]:
+    """Group items under both the per-request input cap and the token cap.
+
+    Either can bind first: a hundred 700-token chunks sit well under the token
+    cap, while a hundred wide tables would not.
+    """
     batch: list = []
     tokens = 0
-    for chunk in chunks:
-        if batch and (len(batch) >= BATCH_SIZE
-                      or tokens + chunk.token_count > MAX_BATCH_TOKENS):
+    for item in items:
+        size = tokens_of(item)
+        if batch and (len(batch) >= BATCH_SIZE or tokens + size > MAX_BATCH_TOKENS):
             yield batch
             batch, tokens = [], 0
-        batch.append(chunk)
-        tokens += chunk.token_count
+        batch.append(item)
+        tokens += size
     if batch:
         yield batch
 
 
 async def embed_chunks(chunks: list) -> None:
     """Embed chunks in batches, in place."""
-    await _embed_items(chunks, lambda c: c.text, lambda c: c.chunk_index, "chunk")
+    await _embed_items(
+        chunks, lambda c: c.text, lambda c: c.chunk_index, "chunk",
+        lambda c: c.token_count,
+    )
 
 
 async def embed_tables(tables: list) -> None:
@@ -78,10 +86,15 @@ async def embed_tables(tables: list) -> None:
     years. `embed_text` mirrors the search_vector expression on document_tables
     so semantic and lexical retrieval see the same text.
     """
-    await _embed_items(tables, lambda t: t.embed_text, lambda t: t.table_index, "table")
+    await _embed_items(
+        tables, lambda t: t.embed_text, lambda t: t.table_index, "table",
+        # Counted here rather than stored: the ORM row has no token_count, and
+        # a stored count would be one more thing to keep in step with the text.
+        lambda t: token_count(t.embed_text),
+    )
 
 
-async def _embed_items(items: list, text_of, index_of, label: str) -> None:
+async def _embed_items(items: list, text_of, index_of, label: str, tokens_of) -> None:
     """Embed anything with a text and an index, in place.
 
     Verifies the returned vector length equals
@@ -99,7 +112,7 @@ async def _embed_items(items: list, text_of, index_of, label: str) -> None:
     expected = settings.openai_embedding_dimensions
     model = settings.openai_embedding_model
 
-    for batch in _batches(items):
+    for batch in _batches(items, tokens_of):
         vectors = await embed_texts([text_of(i) for i in batch])
 
         if len(vectors) != len(batch):
