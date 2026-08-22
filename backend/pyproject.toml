@@ -33,8 +33,18 @@ packages = ["app"]
 add-bounds = "exact"
 exclude-newer = "7 days"
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Integration tests need live Supabase and OpenAI credentials. The fast suite is
+# `pytest -m "not integration"` and must touch neither.
+markers = ["integration: requires live Supabase and/or OpenAI credentials"]
+# Async tests need no per-test decorator.
+asyncio_mode = "auto"
+addopts = "-q --strict-markers"
+
 [dependency-groups]
 dev = [
     "pytest==9.1.1",
+    "pytest-asyncio==1.4.0",
     "ruff==0.16.2",
 ]

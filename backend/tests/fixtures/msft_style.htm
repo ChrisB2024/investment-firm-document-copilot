@@ -1,0 +1,57 @@
+<?xml version='1.0' encoding='ASCII'?>
+<html>
+<body>
+<!--
+  Table of contents with dot leaders and NO anchors, one div per entry — the
+  shape the real filing produces. A link-based filter passes these straight
+  through: each normalises to "Item 1. ....", whose title is dots only. What
+  rejects them is requiring the captured title to contain a word. Without that
+  check every Item appears twice, once here and once real, and Microsoft
+  reports 76 sections against Apple's 23.
+
+  Sized like a real TOC (a 10-K lists ~23 items) so the wrapping div exceeds
+  MAX_HEADING_CHARS, exactly as it does in the corpus. A TOC small enough to
+  fit under that limit is a separate, narrower case.
+-->
+<div><table>
+  <tr>
+    <td><div><span>Item 1.</span><span>&#160;........................</span></div></td>
+    <td><div><span>3</span></div></td>
+  </tr>
+  <tr>
+    <td><div><span>Item 1A.</span><span>&#160;........................</span></div></td>
+    <td><div><span>9</span></div></td>
+  </tr>
+  <tr>
+    <td><div><span>Item 1B.</span><span>&#160;........................</span></div></td>
+    <td><div><span>26</span></div></td>
+  </tr>
+  <tr>
+    <td><div><span>Item 2.</span><span>&#160;........................</span></div></td>
+    <td><div><span>27</span></div></td>
+  </tr>
+  <tr>
+    <td><div><span>Item 3.</span><span>&#160;........................</span></div></td>
+    <td><div><span>28</span></div></td>
+  </tr>
+  <tr>
+    <td><div><span>Item 5.</span><span>&#160;........................</span></div></td>
+    <td><div><span>30</span></div></td>
+  </tr>
+  <tr>
+    <td><div><span>Item 7.</span><span>&#160;........................</span></div></td>
+    <td><div><span>32</span></div></td>
+  </tr>
+  <tr>
+    <td><div><span>Item 8.</span><span>&#160;........................</span></div></td>
+    <td><div><span>45</span></div></td>
+  </tr>
+</table></div>
+
+<div style="font-weight:700">ITEM 1. BUSINESS</div>
+<div>Microsoft is a technology company whose mission is to empower every person.</div>
+
+<div style="font-weight:700">ITEM 1A. RISK FACTORS</div>
+<div>Our cloud-based services face intense competition.</div>
+</body>
+</html>

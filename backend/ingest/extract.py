@@ -325,13 +325,20 @@ def _rows_of(table) -> list[list[str]]:
     return rows
 
 def _title_of(table) -> str | None:
+    """Nearest preceding text, walking back and then up.
+
+    Skips comments and processing instructions: lxml gives those a callable
+    `tag` rather than a string, and `itertext()` raises on them. SEC filings are
+    full of filing-agent comments, so this is not hypothetical.
+    """
     node = table
     while node is not None:
         prev = node.getprevious()
         while prev is not None:
-            text = _norm("".join(prev.itertext()))
-            if text and len(text) <= 200:
-                return text
+            if isinstance(prev.tag, str):
+                text = _norm("".join(prev.itertext()))
+                if text and len(text) <= 200:
+                    return text
             prev = prev.getprevious()
         node = node.getparent()
     return None
