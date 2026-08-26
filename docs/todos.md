@@ -104,14 +104,17 @@ What the corpus is, measured rather than assumed:
   inline `style` attributes, 963 `ix:nonfraction` tags).
 - **No `<h1>`–`<h6>` anywhere.** Headings are bold `<span>`s; structure must come from text.
 - `ix:hidden` holds non-rendering XBRL facts — strip it or numbers duplicate without context.
-- Every filing opens with a TOC whose entries read exactly like real headings. TOC entries sit
-  inside `<a href>`; real headings do not. That is the whole distinction.
+- Every filing opens with a TOC whose entries read exactly like real headings. Apple's sit
+  inside `<a href>` and real headings do not — but Microsoft's use dot leaders and no anchors
+  at all, so a link filter alone lets every Item through twice. The second rule is that a
+  heading's title must contain a real word, which a row of dots does not.
 - Prose cross-references items too ("...discussed in Part I, Item 1A..."), so a heading must be a
   short standalone block, not any line containing "Item 1A".
 - Table cells split values: `$` / `201,183` / `(2)` / `%` are four separate `<td>`s.
 
-Heading detection is verified across all 25 filings — 17–20 Items each, no misses, no TOC bleed.
-Section bodies come out as clean prose (Apple 2024 Item 1A = 68,735 chars; Item 1B = "None.").
+Heading detection is verified across all 25 filings — 21–23 Items each, every core item present,
+no TOC bleed. Section bodies come out as clean prose (Apple 2024 Item 1A = 68,735 chars;
+Item 1B = "None.").
 
 - [x] `lxml` and `tiktoken` added. HTML parsing and BPE tokenisation are both in the
       "genuinely hard to get right" category the dependency policy allows.
@@ -121,9 +124,14 @@ Section bodies come out as clean prose (Apple 2024 Item 1A = 68,735 chars; Item 
       Tables are emitted as events in the single document-order walk, so each knows its
       section by construction and the walk never descends into cells (raw-figure leakage
       into prose: 35 chars across the whole corpus).
-- [ ] `ingest/chunk.py` — ~700 token chunks with overlap, split on paragraph boundaries,
+- [x] `ingest/chunk.py` — ~700 token chunks with overlap, split on paragraph boundaries,
       never mid-sentence and never mid-table-row. Prepend the section heading to every chunk;
       a chunk that does not name its company and section is unfindable and uncitable.
+      Two measured gaps, both deliberate rather than unnoticed: the budget is enforced on
+      summed atom counts while the chunk text is a span slice, so uncounted separators put
+      184 of 2,321 chunks (7.9%) over 700, max 730; and the walk-back only takes an atom
+      back if it fits in `OVERLAP_TOKENS`, so 377 of 1,760 consecutive pairs (21.4%) share
+      no text — paragraph atoms are simply larger than the overlap allowance.
 - [x] `ingest/embed.py` — batches under both the input and token caps, reorders responses
       by index (a reorder would otherwise mislabel every passage), verifies dimension and
       count. Embeds chunks and tables through one path.
@@ -139,10 +147,33 @@ Section bodies come out as clean prose (Apple 2024 Item 1A = 68,735 chars; Item 
 - [x] `ingest/persist.py` — upsert-by-accession, replace chunks/tables, pending-embedding
       queries. Verified: re-running writes nothing; bumping the extractor version
       re-extracts and still leaves exactly one copy.
-- [ ] Tests: chunk boundaries, metadata propagation, idempotency. No network.
+- [x] Tests: 47 passing, 1 xfailed. 39 fast (`-m "not integration"`, no network, no DB)
+      plus 8 integration against live Supabase that roll back rather than delete. Every
+      rule was mutation-tested — deleted from the source, then checked that a test went
+      red. That found three tests passing without proving anything: two fixtures placed
+      so the rule under test could not fail, and `fake_embeddings(dimensions=...)` shadowed
+      into a no-op. The strict xfail records an unsplittable paragraph going out at 8,008
+      tokens against a 700 budget; no corpus atom exceeds 680, so it is latent.
 
-**Done when:** all 25 filings ingested; a spot check on Apple FY2024 shows chunks whose text you
-can find in the original filing, with correct ticker/year/section metadata.
+**Done when:** ~~all 25 filings ingested; a spot check on Apple FY2024 shows chunks whose text you
+can find in the original filing, with correct ticker/year/section metadata.~~ **Met.**
+25 documents, 2,321 chunks, 1,724 tables; zero rows missing an embedding or a search_vector,
+zero duplicate accession numbers. Apple FY2024: 65 chunks, contiguous indices, correct
+metadata on every one, and all 666 of its paragraphs found verbatim in the source HTML.
+
+Carried into Phase 3, both found by querying the ingested corpus rather than predicted:
+
+- **Rank lexical results with `ts_rank_cd`, not `ts_rank`.** `ts_rank` ignores term
+  proximity, so "supplier concentration risk" returned four NVDA *Item 15* chunks tied at
+  exactly 0.2464 — one occurrence of each term, scattered, no length normalisation to
+  separate them. `ts_rank_cd` scores cover density and returns Apple's Item 1A instead.
+  Tested and rejected: `setweight` on heading vs body changes nothing here.
+- **NVIDIA files its financial statements under Item 15, not Item 8** (135 chunks vs 5;
+  the other four filers are the reverse). The extraction is faithful — NVDA's Item 8 is a
+  one-chunk "see Part IV, Item 15" — but a filter on Item 8 silently drops NVIDIA from any
+  cross-company comparison, and an NVIDIA revenue citation reads "Exhibits and Financial
+  Statement Schedules". Wants a normalised topic in `chunk_metadata` rather than a relabelled
+  heading; costs a re-ingest (~$0.03) once Phase 3 shows what retrieval actually filters on.
 
 ---
 
