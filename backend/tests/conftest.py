@@ -87,14 +87,30 @@ def fake_embeddings(monkeypatch):
         calls = fake_embeddings()
         await embed_chunks(chunks)
         assert calls == [100, 100, 50]
+        assert calls.texts[0][0] == chunks[0].text
 
     Each vector is filled with its own position in the batch, so a test can
     prove a response was mapped back to the right item.
     """
-    def _install(*, dimensions: int = 1536, shuffle: bool = False, drop: int = 0) -> list[int]:
+    class _Calls(list):
+        """Batch sizes, plus the texts of each batch on `.texts`.
+
+        A list subclass so `calls == [100, 100, 50]` keeps working; the texts
+        are what proves *which* attribute of an item was sent to embed.
+        """
+        def __init__(self) -> None:
+            super().__init__()
+            self.texts: list[list[str]] = []
+
+    def _install(*, dimensions: int = 1536, shuffle: bool = False, drop: int = 0) -> _Calls:
         from ingest import embed
 
-        calls: list[int] = []
+        # Bound here because `create` takes its own `dimensions` argument, which
+        # would otherwise shadow this one and make the parameter dead — the stub
+        # would always hand back exactly the width the caller asked for, and a
+        # dimension-drift test could never fail.
+        returned_dimensions = dimensions
+        calls = _Calls()
 
         class _Item:
             def __init__(self, index: int, embedding: list[float]) -> None:
@@ -109,7 +125,9 @@ def fake_embeddings(monkeypatch):
             @staticmethod
             async def create(*, model: str, dimensions: int, input: list[str]) -> _Response:
                 calls.append(len(input))
-                data = [_Item(i, [float(i)] * dimensions) for i in range(len(input) - drop)]
+                calls.texts.append(list(input))
+                data = [_Item(i, [float(i)] * returned_dimensions)
+                        for i in range(len(input) - drop)]
                 if shuffle:
                     # Deliberately not the order sent. embed_texts must sort by
                     # index, or every vector lands on the wrong passage.

@@ -38,9 +38,6 @@ async def embed_texts(texts: Sequence[str]) -> list[list[float]]:
     Retry on rate limits with backoff. Let anything else propagate — a partial
     corpus that looks complete is worse than a failed run.
     """
-    if not texts:
-        return []
-
     response = await _client.embeddings.create(
         model=settings.openai_embedding_model,
         dimensions=settings.openai_embedding_dimensions,
@@ -50,6 +47,10 @@ async def embed_texts(texts: Sequence[str]) -> list[list[float]]:
 
 
 MAX_BATCH_TOKENS = 200_000
+
+# Per *input*, not per request: text-embedding-3-small accepts 8191 tokens for
+# any one string. Exceeding it fails the whole request, not just that string.
+MAX_INPUT_TOKENS = 8191
 
 def _batches(items: list, tokens_of) -> Iterator[list]:
     """Group items under both the per-request input cap and the token cap.
@@ -97,6 +98,10 @@ async def embed_tables(tables: list) -> None:
 async def _embed_items(items: list, text_of, index_of, label: str, tokens_of) -> None:
     """Embed anything with a text and an index, in place.
 
+    Both pre-flight checks fail before any request is issued, because the
+    endpoint rejects a bad input by failing the whole request: one blank or
+    oversized item would otherwise cost the ~100 good ones batched with it.
+
     Verifies the returned vector length equals
     `settings.openai_embedding_dimensions`: the column is vector(1536) and a
     mismatch fails at insert, but far more usefully it says which model and
@@ -107,6 +112,20 @@ async def _embed_items(items: list, text_of, index_of, label: str, tokens_of) ->
         raise ValueError(
             f"{label}(s) {blank} have empty text; the embeddings endpoint rejects "
             "empty input and would fail the entire batch."
+        )
+
+    oversized = [(index_of(i), size) for i in items
+                 if (size := tokens_of(i)) > MAX_INPUT_TOKENS]
+    if oversized:
+        # Listed rather than dumped: a mis-set chunk budget puts every item over
+        # the cap, and an error naming thousands of them is an error no one reads.
+        shown = ", ".join(f"{label} {index} at {size}" for index, size in oversized[:5])
+        more = f" (+{len(oversized) - 5} more)" if len(oversized) > 5 else ""
+        raise ValueError(
+            f"{len(oversized)} {label}(s) over the {MAX_INPUT_TOKENS}-token input "
+            f"cap: {shown}{more}. The endpoint rejects the whole request, so one "
+            f"oversized {label} takes its entire batch of up to {BATCH_SIZE} with "
+            f"it — and the error it returns does not name the culprit."
         )
 
     expected = settings.openai_embedding_dimensions
