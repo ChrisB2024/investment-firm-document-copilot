@@ -60,6 +60,12 @@ def manifest_entry() -> dict:
 
     Mirrors the real manifest's keys exactly — ingestion maps these onto
     source_documents columns, so a drift here would hide a drift there.
+
+    The accession number is deliberately not a real one. accession_number is
+    unique on source_documents and ingestion upserts on it, so an integration
+    test writing under a genuine number would overwrite that filing's row.
+    Tests that write should still override this with something unique to the
+    run; see the `entry` fixture in test_persist.py.
     """
     return {
         "ticker": "AAPL",
@@ -67,10 +73,10 @@ def manifest_entry() -> dict:
         "form": "10-K",
         "filing_date": "2024-11-01",
         "report_date": "2024-09-28",
-        "accession_number": "0000320193-24-000123",
+        "accession_number": "9999999999-99-999999",
         "primary_document": "aapl-20240928.htm",
         "source_url": "https://www.sec.gov/Archives/edgar/data/320193/x/aapl-20240928.htm",
-        "local_path": "2024/aapl_10-k_2024-11-01_0000320193-24-000123.htm",
+        "local_path": "2024/aapl_10-k_2024-11-01_9999999999-99-999999.htm",
     }
 
 

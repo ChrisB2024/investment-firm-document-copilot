@@ -28,7 +28,7 @@ def _entry(**overrides) -> dict:
         "form": "10-K",
         "filing_date": "2024-11-01",
         "report_date": "2024-09-28",
-        "accession_number": "0000320193-24-000123",
+        "accession_number": "9999999999-99-999999",
         "local_path": "apple_style.htm",
     }
     return {**entry, **overrides}
