@@ -18,12 +18,17 @@ this Form 10-K under the heading &#8220;Risk Factors.&#8221; The Company assumes
 no obligation to update them.</div>
 
 <div style="font-weight:700">Item 1A.&#160;&#160;Risk Factors</div>
-<div>The Company depends on a single supplier for certain components.</div>
+<!--
+  The hidden fact is INSIDE a body div on purpose. The one in the header above
+  cannot leak whatever DROP_TAGS says: it is not inside a div/p, so _scan never
+  emits it as text and a test on it passes without proving anything.
+-->
+<div>The Company depends on a single supplier<ix:hidden><ix:nonFraction name="us-gaap:ConcentrationRiskPercentage">999999</ix:nonFraction></ix:hidden> for certain components.</div>
 
 <div style="font-weight:700">Item 1B. Unresolved Staff Comments</div>
 <div>None.</div>
 
-<!-- 116 characters: longer than the 90 that once silently swallowed it. -->
+<!-- 105 characters: longer than the 90 that once silently swallowed it. -->
 <div style="font-weight:700">Item 5. Market for Registrant&#8217;s Common Equity, Related Stockholder Matters and Issuer Purchases of Equity</div>
 <div>The Company&#8217;s common stock is traded on the Nasdaq Stock Market.</div>
 
