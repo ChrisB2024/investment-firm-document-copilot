@@ -2,21 +2,19 @@
 
 25 filings produce thousands of chunks. One request per chunk is slow enough to
 matter and will hit rate limits; the API takes batches.
+
+The client and the single request live in `app.embeddings`; this module is the
+batching policy over them. `embed_texts` and `MAX_INPUT_TOKENS` are re-exported
+so existing callers keep their import path.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
-
-from openai import AsyncOpenAI
+from collections.abc import Iterator
 
 from app.config import settings
+from app.embeddings import MAX_INPUT_TOKENS, embed_texts
 from ingest.chunk import token_count
-
-_client = AsyncOpenAI(
-    api_key=settings.openai_api_key.get_secret_value(),
-    max_retries=8
-)
 
 # The API caps inputs per request and total tokens per request. Batch size is a
 # trade-off, not a constant to guess at: too large and a single failure costs
@@ -24,33 +22,7 @@ _client = AsyncOpenAI(
 BATCH_SIZE = 100
 
 
-async def embed_texts(texts: Sequence[str]) -> list[list[float]]:
-    """Embed a batch, preserving input order.
-
-    Uses the OpenAI SDK with
-    `settings.openai_embedding_model` and `settings.openai_embedding_dimensions`.
-
-    Order is a correctness requirement, not a nicety: results are zipped back
-    onto chunks positionally, so a reordered response silently attaches every
-    embedding to the wrong passage. Retrieval would still "work" and return
-    confident nonsense.
-
-    Retry on rate limits with backoff. Let anything else propagate — a partial
-    corpus that looks complete is worse than a failed run.
-    """
-    response = await _client.embeddings.create(
-        model=settings.openai_embedding_model,
-        dimensions=settings.openai_embedding_dimensions,
-        input=list(texts)
-    )
-    return [item.embedding for item in sorted(response.data, key=lambda item: item.index)]
-
-
 MAX_BATCH_TOKENS = 200_000
-
-# Per *input*, not per request: text-embedding-3-small accepts 8191 tokens for
-# any one string. Exceeding it fails the whole request, not just that string.
-MAX_INPUT_TOKENS = 8191
 
 def _batches(items: list, tokens_of) -> Iterator[list]:
     """Group items under both the per-request input cap and the token cap.

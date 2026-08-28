@@ -180,17 +180,24 @@ _HYDRATE = text("""
 
 async def hydrate(
         session: AsyncSession,
-        hits: Sequence[Hit],
+        keys: Sequence[tuple[SourceType, UUID]],
 ) -> Mapping[tuple[SourceType, UUID], Passage]:
-    if not hits:
+    """Fetch the content and citation fields for already-ranked rows.
+
+    Takes keys rather than hits because identity is all it needs, and both a
+    `Hit` and a `FusedHit` expose `.key`. Anything missing from the result is a
+    row that disappeared between the search and this call; the caller decides
+    what that means.
+    """
+    if not keys:
         return {}
 
     ids: dict[SourceType, list[UUID]] = {"chunk": [], "table": []}
     seen: set[tuple[SourceType, UUID]] = set()
-    for hit in hits:
-        if hit.key not in seen:
-            seen.add(hit.key)
-            ids[hit.source_type].append(hit.row_id)
+    for key in keys:
+        if key not in seen:
+            seen.add(key)
+            ids[key[0]].append(key[1])
 
     result = await session.execute(
         _HYDRATE,

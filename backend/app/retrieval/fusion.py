@@ -32,6 +32,8 @@ from uuid import UUID
 
 from app.retrieval.queries import Hit, SourceType
 
+_Key = tuple[SourceType, UUID]
+
 # From Cormack et al. 2009, where 60 was found to work across TREC collections
 # without per-collection tuning. Measured above: this corpus is insensitive to
 # it, so the constant is a default to leave alone rather than a knob.
@@ -57,8 +59,10 @@ class FusedHit:
     # arm name -> rank in that arm, e.g. {"vector": 3, "text": 11}
     contributions: dict[str, int] = field(default_factory=dict)
 
-
-_Key = tuple[SourceType, UUID]
+    @property
+    def key(self) -> _Key:
+        """Mirrors Hit.key, so a fused result identifies a row the same way."""
+        return (self.source_type, self.row_id)
 
 
 def fuse(

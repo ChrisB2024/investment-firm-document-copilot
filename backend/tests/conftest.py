@@ -109,7 +109,10 @@ def fake_embeddings(monkeypatch):
             self.texts: list[list[str]] = []
 
     def _install(*, dimensions: int = 1536, shuffle: bool = False, drop: int = 0) -> _Calls:
-        from ingest import embed
+        # Patched on app.embeddings, which owns the client — ingest.embed only
+        # re-exports embed_texts, and patching there would leave the real client
+        # in place and spend money.
+        from app import embeddings
 
         # Bound here because `create` takes its own `dimensions` argument, which
         # would otherwise shadow this one and make the parameter dead — the stub
@@ -143,7 +146,7 @@ def fake_embeddings(monkeypatch):
         class _Client:
             embeddings = _Embeddings()
 
-        monkeypatch.setattr(embed, "_client", _Client())
+        monkeypatch.setattr(embeddings, "_client", _Client())
         return calls
 
     return _install
