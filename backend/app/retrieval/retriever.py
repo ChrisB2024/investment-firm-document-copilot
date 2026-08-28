@@ -28,7 +28,7 @@ and its two neighbours add 1,056 — so it is a per-call choice, not a default.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from uuid import UUID
 
@@ -42,9 +42,11 @@ from app.embeddings import embed_texts
 from app.retrieval.fusion import RRF_K, FusedHit, fuse
 from app.retrieval.queries import (
     NO_FILTERS,
+    Cell,
     Filters,
     Passage,
     SourceType,
+    grid_search,
     hydrate,
     text_search,
     vector_search,
@@ -64,6 +66,13 @@ MIN_ARM_LIMIT = 20
 # roughly 8k tokens, where five at ten would be 50 and would not fit a turn
 # alongside the rest of the prompt.
 DEFAULT_PER_TICKER = 3
+
+# How many passages each (ticker, fiscal_year) cell gets. Deliberately 1: five
+# companies across five years is 25 cells, and 25 passages is ~15,000 tokens,
+# where 2 per cell is ~30,000. Whether one passage per filing-year carries
+# enough to answer "how did the wording change" is not settled — try both
+# against brief question 6 and read the output before moving this.
+DEFAULT_PER_CELL = 1
 
 
 @dataclass
@@ -135,6 +144,29 @@ async def retrieve(
     if not fused:
         return []
 
+    return await _materialise(session, fused, with_context=with_context)
+
+
+async def _materialise(
+    session: AsyncSession,
+    fused: list[FusedHit],
+    *,
+    with_context: bool,
+) -> list[RetrievedPassage]:
+    """Fused hits in, readable results out. One hydrate, one optional widen.
+
+    Extracted only now, at the third caller. `retrieve`, `retrieve_per_ticker`
+    and `retrieve_grid` differ entirely in how they rank and merge, and not at
+    all in what they do afterwards — and the part they share is where the
+    invariants live: ranks contiguous from 1, `contributions` copied rather than
+    aliased, `context` keyed the way the package keys a passage. Three copies of
+    that would drift silently, because every copy still looks correct alone.
+
+    `score` is whatever the caller's fusion produced, and for the fan-out and
+    the grid that is a *within-group* RRF score, deliberately not what the
+    merged order sorts by. Passing it through unchanged keeps that decision with
+    the function that made it.
+    """
     passages = await hydrate(session, [f.key for f in fused])
 
     results: list[RetrievedPassage] = []
@@ -146,6 +178,9 @@ async def retrieve(
             RetrievedPassage(
                 passage=passage,
                 score=f.score,
+                # Not f.rank: a row lost between search and hydrate would leave
+                # a gap, and a caller reading "rank 4" over four results would
+                # have no way to know which one vanished.
                 rank=len(results) + 1,
                 contributions=dict(f.contributions),
             )
@@ -341,64 +376,142 @@ async def retrieve_per_ticker(
 
     # One hydration for the whole fan-out, not one per company: the arms are
     # ranked separately but their survivors are just row ids by this point.
-    passages = await hydrate(session, [f.key for f in merged])
+    return await _materialise(session, merged, with_context=with_context)
 
-    results: list[RetrievedPassage] = []
-    for f in merged:
-        passage = passages.get(f.key)
-        if passage is None:
-            continue  # row went away between search and hydrate
-        results.append(
-            RetrievedPassage(
-                passage=passage,
-                # The within-company RRF score, deliberately not what the merged
-                # order sorts by. Two companies' scores are computed over
-                # different populations and comparing them is what the fan-out
-                # exists to avoid.
-                score=f.score,
-                rank=len(results) + 1,
-                contributions=dict(f.contributions),
-            )
+
+async def retrieve_grid(
+    session: AsyncSession,
+    question: str,
+    *,
+    tickers: Sequence[str],
+    years: Sequence[int],
+    per_cell: int = DEFAULT_PER_CELL,
+    with_context: bool = False,
+    k: int = RRF_K,
+) -> list[RetrievedPassage]:
+    """One search per (ticker, fiscal_year), in a single round trip.
+
+    `retrieve_per_ticker` fixed company coverage and exposed the next failure:
+    nine of the ten brief questions ask how something changed across 2021-2025,
+    and fanning out over companies alone gives each of them at most 2 of 5
+    years. Company coverage and year coverage compete for the same slots, and
+    five companies across five years is 25 filings — a top-10 cannot hold them
+    however it is ranked.
+
+    One statement rather than 50. The fan-out's cost was never query time —
+    EXPLAIN ANALYZE reports 3-7ms of server time against ~100ms per round trip
+    to remote Supabase — so a grid issued as 25 fan-outs would be ~5s of waiting
+    on the network to do nothing. `grid_search` partitions inside the database
+    and returns every cell at once.
+
+    Fusion still happens here, in Python. RRF is `1/(k + rn)` and trivially
+    expressible in the window query, which is exactly the temptation: it would
+    mean two implementations of ranking to keep in step, and it would drop
+    `contributions` — the field that tells "not in the corpus" from "one arm
+    found it and fusion buried it", and the only reason the CLI can diagnose a
+    failure rather than just display one.
+
+    The grid's dimensions come from the question, not from here. Q1 is one
+    company across five years, Q7 is two, Q6 is five; the agent reads which
+    companies and years a question is about and passes them in. A question that
+    is not comparative wants `retrieve`.
+    """
+    if not tickers or not years:
+        raise ValueError(
+            "retrieve_grid() needs both companies and years to build a grid. A "
+            "question that is not comparative wants retrieve()."
         )
+    if per_cell <= 0:
+        return []
 
-    if with_context and results:
-        context = await neighbours(session, [r.passage for r in results])
-        for r in results:
-            r.context = context.get((r.passage.source_type, r.passage.row_id))
+    # The only network call in the path. A grid does not change the question, so
+    # one vector serves all 25 cells and both arms within each.
+    (question_vector,) = await embed_texts([question])
 
-    return results
+    grid = await grid_search(
+        session,
+        question_vector,
+        question,
+        tickers=tickers,
+        years=years,
+        # Per cell per arm, playing the role _arm_limit plays everywhere else:
+        # fusion can only reward agreement it was asked about, and at per_cell=1
+        # a bare 2x would ask each arm for two.
+        depth=_arm_limit(per_cell),
+    )
+    # Empty means no cell had rows at all — none of these companies filed in any
+    # of these years. Distinct from a cell that exists and matched nothing, which
+    # grid_search reports by omitting that cell alone.
+    if not grid:
+        return []
+
+    # `fuse` unchanged, once per cell: each cell is its own population, and its
+    # two arms are the only rankings that may be compared.
+    by_company: dict[str, dict[int, list[FusedHit]]] = {}
+    for (ticker, year), arms in grid.items():
+        by_company.setdefault(ticker, {})[year] = fuse(arms, limit=per_cell, k=k)
+
+    # Round-robin twice: years within a company, then companies. One flat pass
+    # over cells would not do — with per_cell=1 every cell holds one hit, so
+    # there is a single round and the order collapses to a global sort by score.
+    # Measured on question 6, that gives {AAPL: 4, NVDA: 5, MSFT: 1} at a cut of
+    # ten: NVIDIA takes all five of its years before Alphabet or Amazon get one,
+    # which is the shape the grid exists to prevent, reappearing under
+    # truncation. Two levels give one passage per company at a cut of five and
+    # two each at ten.
+    merged = _interleave(
+        {ticker: _interleave(years) for ticker, years in by_company.items()}
+    )
+    if not merged:
+        return []
+
+    return await _materialise(session, merged, with_context=with_context)
 
 
-def _interleave(by_ticker: dict[str, list[FusedHit]]) -> list[FusedHit]:
-    """Round-robin the per-company lists: every best, then every second.
+def _interleave[Key: (str, int, Cell)](
+    by_key: Mapping[Key, list[FusedHit]],
+) -> list[FusedHit]:
+    """Round-robin the per-group lists: every best, then every second.
+
+    Groups are companies for `retrieve_per_ticker`, and for `retrieve_grid` this
+    runs twice — fiscal years within a company, then companies. Nesting rather
+    than teaching this function about cells: what balance means is the caller's
+    question, and a flat pass over (ticker, fiscal_year) balances *cells*, which
+    at one hit per cell is a single round and therefore no balancing at all.
+
+    One function, not two: the round-robin property is the same property at
+    either level, and two copies would drift.
 
     This is what keeps `rank` meaningful after the merge. Sorting the merged set
     by score would undo the fan-out at exactly the moment it matters — the
     caller truncating to fit a context window — and hand back the same
     NVDA-heavy top-10 the fan-out was built to avoid. Round-robin makes the
-    guarantee survive truncation: cut the list anywhere and the companies are
-    still within one passage of each other.
+    guarantee survive truncation: cut the list anywhere and the groups are still
+    within one passage of each other.
 
     So `rank` no longer means "most relevant in the corpus". It means position
     in a deliberately balanced ordering, and rank 1 is the best passage for the
-    strongest company at that depth. A caller that wants pure relevance wants
+    strongest group at that depth. A caller that wants pure relevance wants
     `retrieve`.
 
-    Within a round, order by score and then by ticker: the score comparison is
+    The guarantee is only as good as the grouping it is handed. Balance holds
+    across the keys of `by_key` and says nothing about any other property — see
+    the nesting in `retrieve_grid` for why that distinction has teeth.
+
+    Within a round, order by score and then by key: the score comparison is
     across populations and so is only a presentation choice, but it is a
     deterministic one, and determinism is what makes the output diffable
-    between runs.
+    between runs. Tie-breaking on the key is why `Key` is constrained to a
+    ticker or a cell rather than left open: it has to be orderable.
 
-    No cross-company dedupe, because a document has exactly one ticker and the
-    arms are disjoint by construction.
+    No cross-group dedupe, because a document has exactly one ticker and one
+    fiscal year, so the groups are disjoint by construction.
     """
-    depth = max((len(hits) for hits in by_ticker.values()), default=0)
+    depth = max((len(hits) for hits in by_key.values()), default=0)
 
     merged: list[FusedHit] = []
     for i in range(depth):
-        round_i = [
-            (hits[i], ticker) for ticker, hits in by_ticker.items() if i < len(hits)
-        ]
+        round_i = [(hits[i], key) for key, hits in by_key.items() if i < len(hits)]
         round_i.sort(key=lambda pair: (-pair[0].score, pair[1]))
         merged.extend(hit for hit, _ in round_i)
     return merged

@@ -40,7 +40,7 @@ from dataclasses import dataclass
 from typing import Literal
 from uuid import UUID
 
-from sqlalchemy import Text, bindparam, text
+from sqlalchemy import Integer, Text, bindparam, text
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -461,6 +461,208 @@ async def text_search(
         ]
 
     return await run(_TSQUERY_ALL) or await run(_TSQUERY_ANY)
+
+
+# One (ticker, fiscal_year) pair. The unit a comparative question is really
+# asking about: "how did this change from 2021 to 2025" is twenty-five of these
+# for five companies, not one ranking of ten.
+Cell = tuple[str, int]
+
+
+# One pool branch per source type. Both tables carry `embedding` and
+# `search_vector`, so a single pool feeds both arms and the filtering join to
+# `source_documents` happens once instead of four times.
+_GRID_POOL_BRANCH = """
+    SELECT '{source_type}'::text AS source_type,
+           {a}.id                AS row_id,
+           {a}.document_id       AS document_id,
+           d.ticker              AS ticker,
+           d.fiscal_year         AS fiscal_year,
+           {a}.embedding         AS embedding,
+           {a}.search_vector     AS search_vector
+      FROM {table} {a}
+      JOIN source_documents d ON d.id = {a}.document_id
+     WHERE d.ticker = ANY(:tickers) AND d.fiscal_year = ANY(:years)
+"""
+
+# Both arms rank inside the cell, and both break ties on row_id. Ties are not
+# hypothetical here: ts_rank_cd returned four NVDA chunks at exactly 0.2464
+# corpus-wide, and inside a ~100-row cell an exact tie is likelier still.
+# Without a total order `rn` would be arbitrary, and `rn` is what RRF consumes —
+# an unstable rank means an unstable answer between two runs of one question.
+_GRID_ARM = """
+    SELECT '{arm}'::text   AS arm,
+           p.source_type   AS source_type,
+           p.row_id        AS row_id,
+           p.document_id   AS document_id,
+           p.ticker        AS ticker,
+           p.fiscal_year   AS fiscal_year,
+           {score}         AS score,
+           row_number() OVER (
+               PARTITION BY p.ticker, p.fiscal_year
+               ORDER BY {order}, p.row_id
+           )               AS rn
+      FROM pool p {join}
+     WHERE {where}
+"""
+
+
+async def grid_search(
+    session: AsyncSession,
+    embedding: list[float],
+    query: str,
+    *,
+    tickers: Sequence[str],
+    years: Sequence[int],
+    depth: int,
+    source_types: tuple[SourceType, ...] = ("chunk", "table"),
+) -> dict[Cell, dict[str, list[Hit]]]:
+    """Both arms, ranked *within* every (ticker, fiscal_year) cell, in one query.
+
+    Returns each cell's two ranked lists in the shape `fuse` already consumes:
+    {("AAPL", 2024): {"vector": [...], "text": [...]}}. The caller fuses per
+    cell — see `retrieve_grid`.
+
+    Why this exists rather than a bigger `limit`, measured on brief question 10:
+    a single ranked search never surfaces Amazon at all, not at limit=10 and not
+    at limit=100 with 64,889 tokens. Amazon genuinely does not rank in the top
+    hundred for that question, so no value of `limit` reaches it. Coverage is
+    not something you can buy with a larger sample of the wrong ordering.
+
+        retrieve(limit=10)     3 of 5 companies    6,104 tokens
+        retrieve(limit=100)    4 of 5 companies   64,889 tokens
+        this, per_cell=1      25 of 25 cells      14,636 tokens
+
+    The partition is what makes this different from `vector_search` under a
+    filter: ranking happens *inside* each cell, so every company-year gets its
+    own top-k and cannot be crowded out by a stronger one.
+
+    `depth` is per cell per arm, and plays the role `_arm_limit` plays
+    elsewhere: fusion can only reward agreement it was asked about.
+
+    The AND-then-OR fallback of `text_search` is kept, but decided **per cell**
+    rather than for the statement as a whole. That is the one place this
+    function must differ, and the reason is the same measurement that motivates
+    it: inside a single filing-year the pool is ~100 rows, so `plainto_tsquery`
+    ANDing fifteen lexemes matches nothing far more often than it does
+    corpus-wide. A statement-wide fallback would fire only when *every* cell
+    came back empty — so one strong company matching under AND would suppress
+    the fallback for the four that did not, and those cells would be reduced to
+    a vector-only ranking by a decision made somewhere else entirely. Falling
+    back cell by cell keeps AND's precision where AND works, which is the
+    property `text_search` measured and this must not lose.
+
+    A cell with no rows at all — a company that did not file that year — is
+    absent from the result rather than present and empty, so the caller can tell
+    "nothing matched" from "nothing exists". An arm that found nothing in a cell
+    the other arm did reach is likewise absent rather than an empty list; `fuse`
+    ranks over whichever arms are present, and `contributions` then records that
+    only one saw it.
+    """
+    if depth < 1:
+        raise ValueError(f"depth={depth} is not a retrieval")
+    if not source_types:
+        return {}
+
+    # Normalised the way `Filters` normalises, so a caller cannot address the
+    # same cell as both "aapl" and "AAPL" and get two half-filled grids.
+    scope = list(dict.fromkeys(t.strip().upper() for t in tickers))
+    span = list(dict.fromkeys(years))
+    if not scope or not span:
+        return {}
+
+    pool = _union([
+        _GRID_POOL_BRANCH.format(
+            source_type=source_type, table=table, a=alias
+        )
+        for source_type, (table, alias) in (
+            (st, _SOURCES[st]) for st in source_types
+        )
+    ])
+
+    # A NULL embedding sorts last under ASC rather than being excluded, so an
+    # unembedded row would take a slot in a thin cell and rank ahead of nothing.
+    # The text arm needs no such guard: `@@` never matches a NULL tsvector.
+    vector_arm = _GRID_ARM.format(
+        arm="vector",
+        score=f"1 - (p.embedding <=> {_QVEC})",
+        order=f"p.embedding <=> {_QVEC}",
+        join="",
+        where="p.embedding IS NOT NULL",
+    )
+    text_arm = """
+        SELECT * FROM text_all
+        UNION ALL
+        SELECT * FROM text_any a
+         WHERE NOT EXISTS (
+             SELECT 1 FROM text_all b
+              WHERE b.ticker = a.ticker AND b.fiscal_year = a.fiscal_year
+         )
+    """
+
+    def text_branch(column: str) -> str:
+        rank = f"ts_rank_cd(p.search_vector, q.{column}, {TS_RANK_NORMALIZATION})"
+        return _GRID_ARM.format(
+            arm="text",
+            score=rank,
+            order=f"{rank} DESC",
+            join="CROSS JOIN q",
+            where=f"p.search_vector @@ q.{column}",
+        )
+
+    # Both tsqueries are built once in their own CTE and joined in, so the `@@`
+    # filter and the `ts_rank_cd` ordering cannot drift into ranking a row that
+    # does not match — the same guarantee `text_search` gets from binding
+    # `:query` once, held across four more uses.
+    stmt = text(f"""
+        WITH q AS (
+            SELECT {_TSQUERY_ALL} AS q_all, {_TSQUERY_ANY} AS q_any
+        ),
+        pool AS ({pool}),
+        vector_arm AS ({vector_arm}),
+        text_all AS ({text_branch("q_all")}),
+        text_any AS ({text_branch("q_any")}),
+        text_arm AS ({text_arm})
+        SELECT arm, source_type, row_id, document_id, ticker, fiscal_year, score, rn
+          FROM vector_arm
+         WHERE rn <= :depth
+        UNION ALL
+        SELECT arm, source_type, row_id, document_id, ticker, fiscal_year, score, rn
+          FROM text_arm
+         WHERE rn <= :depth
+         ORDER BY ticker, fiscal_year, arm, rn
+    """).bindparams(
+        bindparam("embedding", type_=Text()),
+        bindparam("tickers", type_=ARRAY(Text())),
+        bindparam("years", type_=ARRAY(Integer())),
+    )
+
+    result = await session.execute(
+        stmt,
+        {
+            "embedding": _vector_literal(embedding),
+            "query": query,
+            "tickers": scope,
+            "years": span,
+            "depth": depth,
+        },
+    )
+
+    # Rows arrive ordered by (ticker, fiscal_year, arm, rn), so appending in
+    # order is enough — no per-cell sort afterwards.
+    grid: dict[Cell, dict[str, list[Hit]]] = {}
+    for row in result:
+        arms = grid.setdefault((row.ticker, row.fiscal_year), {})
+        arms.setdefault(row.arm, []).append(
+            Hit(
+                source_type=row.source_type,
+                row_id=row.row_id,
+                document_id=row.document_id,
+                rank=row.rn,
+                score=row.score,
+            )
+        )
+    return grid
 
 
 # How the two source types combine: one UNION per search, so each search returns
