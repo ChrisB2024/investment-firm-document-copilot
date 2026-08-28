@@ -186,9 +186,15 @@ def _arm_limit(limit: int) -> int:
 # The anchor matches its own predicate and is deliberately kept — `context` is
 # the whole widened passage, in reading order, not a pair of fragments the
 # caller would have to reassemble without knowing which came first.
+#
+# `a.section` comes back so the window can carry the heading once. Every chunk's
+# text is prefixed with it by `ingest.chunk`, so joining the rows raw repeats it
+# per neighbour — 2.5 times per window, measured — which is redundant tokens in
+# a model's context and reads as three sections rather than one passage.
 _NEIGHBOURS = text("""
-    SELECT a.id   AS anchor_id,
-           n.text AS text
+    SELECT a.id      AS anchor_id,
+           a.section AS section,
+           n.text    AS text
       FROM document_chunks a
       JOIN document_chunks n
         ON n.document_id = a.document_id
@@ -221,6 +227,10 @@ async def neighbours(
 
     Tables have no neighbours. They are whole by construction, and a table's
     `table_index` neighbour is a different table, not more of this one.
+
+    The window keeps the section heading once, at the top, rather than once per
+    neighbour. All three chunks carry the same heading by construction — the
+    join requires it — so repeating it says nothing and costs tokens.
     """
     if radius < 1:
         return {}
@@ -239,7 +249,16 @@ async def neighbours(
 
     windows: dict[tuple[SourceType, UUID], list[str]] = {}
     for row in result:
-        windows.setdefault(("chunk", row.anchor_id), []).append(row.text)
+        key = ("chunk", row.anchor_id)
+        if key not in windows:
+            # The heading, once. Every row in this window shares it.
+            windows[key] = [row.section]
+        # removeprefix rather than a slice: it is a no-op if a future chunker
+        # stops prefixing, which degrades to today's duplicated heading instead
+        # of silently eating the first line of the body.
+        body = row.text.removeprefix(f"{row.section}\n\n")
+        if body and body != row.section:
+            windows[key].append(body)
 
     return {key: "\n\n".join(parts) for key, parts in windows.items()}
 
