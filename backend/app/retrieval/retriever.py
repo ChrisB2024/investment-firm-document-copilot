@@ -311,9 +311,16 @@ async def retrieve_per_ticker(
     # round trips and N-1 times the cost for the same vector.
     (question_vector,) = await embed_texts([question])
 
-    # Sequential on purpose. An AsyncSession is not safe for concurrent use, and
-    # each arm runs in single-digit milliseconds — five companies is ~30ms of
-    # database time against an embedding call an order of magnitude longer.
+    # Sequential on purpose: an AsyncSession is not safe for concurrent use.
+    #
+    # The cost is round trips, not query time. EXPLAIN ANALYZE reports 3-7ms of
+    # *server* time, but against remote Supabase a round trip is ~100ms, so five
+    # companies is ~1s of wall clock rather than the ~30ms the server timings
+    # suggest. That is tolerable here and is not a reason to reach for
+    # concurrency; it is a reason to prefer one statement over N when the fan-out
+    # grows. Fanning out over (ticker, fiscal_year) is 50 queries and ~5s, which
+    # is why that grid belongs in a single windowed query instead — see
+    # docs/todos.md, Phase 3.
     arm_limit = _arm_limit(per_ticker)
     by_ticker: dict[str, list[FusedHit]] = {}
     for ticker in scope:

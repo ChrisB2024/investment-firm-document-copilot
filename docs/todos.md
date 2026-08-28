@@ -181,18 +181,72 @@ Carried into Phase 3, both found by querying the ingested corpus rather than pre
 
 Goal: given a question, the right passages come back — provable before any LLM is involved.
 
-- [ ] `app/retrieval/queries.py` — pgvector cosine query and Postgres full-text query, each bounded
-      (top-k, optional ticker/year filters).
-- [ ] `app/retrieval/fusion.py` — Reciprocal Rank Fusion over the two ranked lists.
-- [ ] `app/retrieval/retriever.py` — embed query → both searches → fuse → hydrate chunks + document
-      metadata + neighbouring chunks.
-- [ ] A scratch CLI that prints top-k passages for a question, so you can eyeball quality.
-- [ ] Run the 10 questions in [client-brief.md](client-brief.md) through it. Note which fail and why
-      (missing chunk? bad chunking? lexical vs semantic?) — fix in Phase 2, not with a prompt.
+- [x] `app/retrieval/queries.py` — bounded pgvector and full-text queries over both source types,
+      with ticker / fiscal-year / form filters. Rank lexically with `ts_rank_cd`, never `ts_rank`:
+      the latter ignores term proximity and returned four NVDA *Item 15* chunks tied at exactly
+      0.2464 for "supplier concentration risk". Require every term, falling back to any term only
+      when that returns *zero* rows — `plainto_tsquery` ANDs fifteen-odd lexemes, so two real
+      analyst questions matched nothing at all.
+- [x] `app/retrieval/fusion.py` — RRF on rank alone. Mean overlap between the two arms is 4 of 20
+      and one question overlaps in nothing, which is the case for fusing at all. `k` is not worth
+      tuning (top-10 membership identical at k = 10, 60, 200). Ties are the normal case, so the
+      tie-break is load-bearing and the output is order-independent.
+- [x] `app/retrieval/retriever.py` — `retrieve` and `retrieve_per_ticker`. Neighbour expansion is
+      constrained to the same *section*, not just the same document: 23.3% of adjacent chunk pairs
+      straddle a section boundary, so `chunk_index ± 1` alone attaches another Item's prose to the
+      citation one time in four.
+- [x] A scratch CLI (`python -m app.retrieval.cli`, `--brief` runs all ten).
+- [x] Run the 10 questions in [client-brief.md](client-brief.md) through it. Findings below.
+- [ ] `retrieve_per_cell` — one statement covering the (ticker, fiscal_year) grid. See below.
 - [ ] Tests: RRF ordering with known inputs, filter application, empty-result handling.
 
-**Done when:** for each of the 10 brief questions, the passages needed to answer it appear in the
-top ~10 results.
+### What the ten questions showed
+
+Two distinct failures, and only the first was predicted.
+
+**Company coverage.** Five of the ten questions name several companies, and a single top-10
+returns two or three of them:
+
+| Q | asks about | `retrieve(limit=10)` returned |
+| - | ---------- | ----------------------------- |
+| 6 | all five | `NVDA×6 AAPL×4` — Alphabet, Microsoft, Amazon absent |
+| 7 | Apple + NVIDIA | `AAPL×9 NVDA×1` |
+| 8 | MSFT, GOOGL, AMZN, NVDA | `GOOGL×5 NVDA×3 MSFT×2` — Amazon absent |
+| 9 | all five | `AAPL×5 GOOGL×5` |
+| 10 | all five | `AAPL×5 GOOGL×3 MSFT×2` |
+
+The four single-company questions (1, 3, 4, 5) pass cleanly, so this is not a ranking bug —
+ranking by relevance is doing the right thing and the shape is wrong for the question.
+`retrieve_per_ticker` fixes all five: every company asked about is covered.
+
+**Year coverage, which fan-out makes worse.** Nine of the ten questions ask how something
+*changed* across 2021–2025, and fan-out at 2 passages per company gives at most 2 of 5 years:
+
+```
+Q6   AAPL:2/5  AMZN:2/5  GOOGL:1/5  MSFT:1/5  NVDA:1/5
+Q9   AAPL:2/5  AMZN:2/5  GOOGL:2/5  MSFT:2/5  NVDA:2/5
+```
+
+The arithmetic is the constraint, not the implementation: five companies across five years is 25
+filings, and a top-10 cannot hold them. Company coverage and year coverage compete for the same
+ten slots. Full grid coverage costs 25 passages / ~15,000 tokens, which a context window absorbs
+comfortably — so the answer is to fan out over (ticker, fiscal_year), not ticker alone.
+
+**Do the grid in one statement.** `EXPLAIN ANALYZE` reports *server* time; against remote Supabase
+a round trip is ~100 ms, so the per-cell loop is ~5 s for 50 queries — too slow for interactive
+chat. A single `row_number() over (partition by ticker, fiscal_year order by distance)` returns all
+25 cells in **69–758 ms**. One round trip instead of fifty.
+
+This also corrects the note in `retrieve_per_ticker` claiming each arm costs single-digit
+milliseconds: that is server time. Five companies is ~1 s of wall clock, not ~30 ms.
+
+**Still open, and now with evidence available:** whether to weight the arms. `contributions` shows
+plenty of passages found by one arm only — Q1 rank 6 is `text=1` with no vector entry, rank 7 is
+`vector=1` with no text entry, both scoring 0.01639.
+
+**Done when:** ~~for each of the 10 brief questions, the passages needed to answer it appear in the
+top ~10 results.~~ Company coverage met via `retrieve_per_ticker`; year coverage needs the per-cell
+query above.
 
 ---
 
