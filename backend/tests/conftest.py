@@ -13,8 +13,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from uuid import UUID
 
 import pytest
+
+from app.assistant.deps import DocumentAgentDeps
+from app.assistant.outputs import Citation, GroundedAnswer, SourcePassage
+from app.retrieval.queries import Passage, SourceType
+from app.retrieval.retriever import RetrievedPassage
 
 FIXTURES = Path(__file__).parent / "fixtures"
 CORPUS_ROOT = Path(__file__).resolve().parents[2] / "data" / "downloads"
@@ -150,3 +156,130 @@ def fake_embeddings(monkeypatch):
         return calls
 
     return _install
+
+
+# --- assistant and grounding ------------------------------------------------
+#
+# At root scope rather than in tests/assistant/, because pytest resolves
+# fixtures per directory and tests/grounding/ needs the same four. That is the
+# mechanism forcing the move, not a third caller: the alternative is two copies
+# that drift, and a drifting fixture shows up as a suite that quietly stops
+# covering something.
+
+# Row ids and document ids live in separate ranges, so a passage carrying its
+# row id through as its document id is visible rather than plausible.
+DOCUMENT_OFFSET = 2**64
+
+
+@pytest.fixture
+def passage():
+    """Build a `SourcePassage` — what a tool hands the model.
+
+    `title` and `section` are keywords because the interesting tests set exactly
+    one of them: a quote must be checkable against every field the model was
+    shown, and a test that sets all three cannot tell which field was read.
+    """
+
+    def _passage(
+        handle: str,
+        text: str,
+        *,
+        title: str | None = None,
+        section: str | None = None,
+        source_type: SourceType = "chunk",
+        n: int = 1,
+        ticker: str = "AAPL",
+        fiscal_year: int = 2024,
+    ) -> SourcePassage:
+        return SourcePassage(
+            handle=handle,
+            ticker=ticker,
+            fiscal_year=fiscal_year,
+            form="10-K",
+            section=section,
+            title=title,
+            text=text,
+            source_type=source_type,
+            row_id=UUID(int=n),
+            document_id=UUID(int=DOCUMENT_OFFSET + n),
+        )
+
+    return _passage
+
+
+@pytest.fixture
+def retrieved():
+    """Build a `RetrievedPassage` — what `offer` consumes.
+
+    Deliberately not built on the `passage` fixture. `offer`'s whole job is the
+    translation between the two, and a factory that shared their construction
+    could not fail when the translation drops a field. It has already dropped
+    `title` once.
+    """
+
+    def _retrieved(
+        n: int,
+        *,
+        source_type: SourceType = "chunk",
+        text: str | None = None,
+        title: str | None = None,
+        ticker: str = "AAPL",
+        fiscal_year: int = 2024,
+    ) -> RetrievedPassage:
+        return RetrievedPassage(
+            passage=Passage(
+                source_type=source_type,
+                row_id=UUID(int=n),
+                document_id=UUID(int=DOCUMENT_OFFSET + n),
+                text=text if text is not None else f"body {n}",
+                title=title,
+                ticker=ticker,
+                fiscal_year=fiscal_year,
+                form="10-K",
+            ),
+            score=1 / n,
+            rank=n,
+            contributions={"vector": n},
+        )
+
+    return _retrieved
+
+
+@pytest.fixture
+def deps():
+    """A fresh `DocumentAgentDeps` with no database.
+
+    `session=None` is honest rather than lazy: `offer` and `resolve` never touch
+    it, so a test that starts to will fail loudly instead of quietly holding a
+    mock that returns whatever it was told to. The tool tests that do need a
+    session build their own.
+    """
+    return DocumentAgentDeps(session=None, user_id=UUID(int=1), thread_id=UUID(int=2))
+
+
+@pytest.fixture
+def answer():
+    """Build a `GroundedAnswer` from (handle, quote) pairs.
+
+    The default prose marks every handle passed, so a test about fabricated
+    handles fails on the fabricated handle and nothing else. `prose` overrides
+    it for the tests that are actually about markers.
+    """
+
+    def _answer(
+        *citations: tuple[str, str],
+        prose: str | None = None,
+        limitations: str | None = None,
+    ) -> GroundedAnswer:
+        handles = list(dict.fromkeys(handle for handle, _ in citations))
+        return GroundedAnswer(
+            answer=(
+                prose
+                if prose is not None
+                else " ".join(f"A claim [{handle}]." for handle in handles)
+            ),
+            citations=[Citation(handle=h, quote=q) for h, q in citations],
+            limitations=limitations,
+        )
+
+    return _answer
