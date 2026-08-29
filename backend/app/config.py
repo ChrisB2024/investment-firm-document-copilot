@@ -44,7 +44,6 @@ class Settings(BaseSettings):
     openai_chat_model: str = "gpt-5.5"
     openai_grounding_model: str = "gpt-4.1-mini"
     openai_agent_request_limit: int = 20
-    openai_agent_temperature: float = 0.0
 
     # --- retrieval ---
     retrieval_candidate_k: int = 50

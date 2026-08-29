@@ -39,6 +39,16 @@ HANDLE_PREFIX = "S"
 MAX_PASSAGES_PER_TURN = 60
 
 
+class PassageBudgetExceeded(Exception):
+    """`offer` was asked for more passages than one turn may hold.
+
+    Its own type because the tool that catches it turns it into a `ModelRetry`
+    telling the model to narrow, and "narrow your search" is the wrong advice
+    for any other failure `offer` could have. The message should say what the
+    call asked for against what was left.
+    """
+
+
 @dataclass
 class DocumentAgentDeps:
     """The turn: who is asking, which thread, and what has been offered so far.
@@ -75,13 +85,13 @@ class DocumentAgentDeps:
           - Mint as f"{HANDLE_PREFIX}{n}" where n counts from 1 across the turn,
             not from 1 per tool call. Two calls each starting at S1 would make
             the second call's S1 overwrite the first's.
-          - Enforce MAX_PASSAGES_PER_TURN. Decide which of the two: truncate and
-            let the model work with what it has, or raise and let the tool turn
-            it into a ModelRetry telling it to narrow the search. Truncating
-            silently drops evidence the answer may need and nothing says so;
-            raising costs a round trip. Lean to raising — a wrong answer built
-            on a silently shortened grid is exactly the failure this product
-            cannot have.
+          - Enforce MAX_PASSAGES_PER_TURN by raising PassageBudgetExceeded.
+            The alternative was truncating and letting the model work with what
+            it has, which silently drops evidence the answer may need and says
+            nothing; a wrong answer built on a shortened grid is exactly the
+            failure this product cannot have. `search_filings` already catches
+            the raise and turns it into a ModelRetry, so a truncating
+            implementation would leave that handler dead.
           - Carry `section` across. `Passage` does not have it (see the TODO in
             agent.py about hydrate), so this is where the gap shows up.
         """

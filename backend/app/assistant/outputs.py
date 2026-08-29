@@ -48,20 +48,20 @@ class SourcePassage(BaseModel):
     )
     text: str
 
-    # Identity, for the backend. Not part of what makes a citation checkable —
-    # the handle is — but the citation *record* in Phase 5 is a foreign key to a
-    # real row, and this is where that row id comes from.
-    source_type: SourceType
-    row_id: UUID
-    document_id: UUID
-
-    # TODO: decide whether `source_type` and the two UUIDs should be excluded
-    #  from the JSON schema the model sees (Field(exclude=True) does not do
-    #  this; a separate model or `model_dump(include=...)` at the tool boundary
-    #  does). Three UUIDs is ~120 characters of pure noise per passage, and a
-    #  25-cell grid pays it 25 times. The counter-argument is that the model
-    #  never sees this model's schema at all — it sees whatever the tool
-    #  returns, serialised — so the cheap fix may just be what the tool returns.
+    # Identity, for the backend. Excluded from serialisation, not from the
+    # model: `.row_id` stays readable in Python, and Phase 5's citation record
+    # is a foreign key to a real row. A tool returns this model whole and
+    # pydantic-ai serialises it, so without the exclusion three UUIDs ride along
+    # on every result — 123 characters a passage, ~770 tokens on a 5x5 grid and
+    # ~1,845 at MAX_PASSAGES_PER_TURN, none of it actionable since no tool takes
+    # a row id.
+    #
+    # This also drops them from `ValidatedAnswer.cited_passages`. If the API
+    # response needs a row id, Phase 5 builds its own wire model rather than
+    # un-excluding here, where the cost lands on every turn.
+    source_type: SourceType = Field(exclude=True)
+    row_id: UUID = Field(exclude=True)
+    document_id: UUID = Field(exclude=True)
 
 
 class Citation(BaseModel):
