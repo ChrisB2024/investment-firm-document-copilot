@@ -197,8 +197,13 @@ Goal: given a question, the right passages come back — provable before any LLM
       citation one time in four.
 - [x] A scratch CLI (`python -m app.retrieval.cli`, `--brief` runs all ten).
 - [x] Run the 10 questions in [client-brief.md](client-brief.md) through it. Findings below.
-- [ ] `retrieve_per_cell` — one statement covering the (ticker, fiscal_year) grid. See below.
-- [ ] Tests: RRF ordering with known inputs, filter application, empty-result handling.
+- [x] `grid_search` + `retrieve_grid` — one statement covering the (ticker, fiscal_year) grid.
+      `row_number() over (partition by ticker, fiscal_year)` per arm over a pool CTE unioning both
+      source types, so every company-year gets its own top-k. A 5×5 grid at depth 10 is 151 ms.
+- [ ] Tests: RRF ordering with known inputs, filter application, empty-result handling. Worth
+      adding a fourth the original list did not name — `_interleave`'s balance under truncation.
+      It has already been wrong once, it is a pure function over known input, and the failure is
+      invisible unless something cuts the list.
 
 ### What the ten questions showed
 
@@ -240,13 +245,39 @@ chat. A single `row_number() over (partition by ticker, fiscal_year order by dis
 This also corrects the note in `retrieve_per_ticker` claiming each arm costs single-digit
 milliseconds: that is server time. Five companies is ~1 s of wall clock, not ~30 ms.
 
+### What the grid fixed
+
+All five comparative questions now cover every company and every year they ask about, in one round
+trip:
+
+| Q | cells | companies | years each | tokens |
+| - | ----- | --------- | ---------- | ------ |
+| 6 | 25/25 | 5 | 5/5/5/5/5 | 15,072 |
+| 7 | 10/10 | 2 | 5/5 | 6,409 |
+| 8 | 20/20 | 4 | 5/5/5/5 | 13,085 |
+| 9 | 25/25 | 5 | 5/5/5/5/5 | 15,336 |
+| 10 | 25/25 | 5 | 5/5/5/5/5 | 15,683 |
+
+Two things that only showed up once it ran:
+
+- **The AND→OR fallback has to be decided per cell.** Across the 25 cells, `plainto_tsquery`
+  reaches 10 for "supplier concentration risk", 20 for "capital expenditures", and 0 for question
+  6. A statement-wide fallback fires only when *every* cell is empty, so the first query would
+  leave 15 cells ranked by the vector arm alone — decided by whichever company happened to match.
+- **Balancing cells is not balancing companies.** A flat round-robin over (ticker, fiscal_year)
+  gave `{AAPL: 4, NVDA: 5, MSFT: 1}` at a cut of ten, NVIDIA taking all five of its years before
+  Alphabet or Amazon got one — the exact shape the grid exists to prevent, reappearing under
+  truncation. `_interleave` now runs twice, years within a company then companies, which holds
+  spread 0 at every cut.
+
 **Still open, and now with evidence available:** whether to weight the arms. `contributions` shows
 plenty of passages found by one arm only — Q1 rank 6 is `text=1` with no vector entry, rank 7 is
 `vector=1` with no text entry, both scoring 0.01639.
 
 **Done when:** ~~for each of the 10 brief questions, the passages needed to answer it appear in the
-top ~10 results.~~ Company coverage met via `retrieve_per_ticker`; year coverage needs the per-cell
-query above.
+top ~10 results.~~ **Met**, for the retrieval half: every question's passages surface, comparative
+ones via `retrieve_grid`. Whether they are the *right* passages is a judgement the CLI now makes
+cheap to re-check, and the tests above are what stop it regressing.
 
 ---
 

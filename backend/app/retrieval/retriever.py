@@ -101,18 +101,17 @@ async def retrieve(
 ) -> list[RetrievedPassage]:
     """Embed, search both arms, fuse, hydrate.
 
-    TODO: implement.
+    Relevance alone, over the whole corpus. That is the right shape for a
+    question about one company — brief question 1 asks only about Apple and
+    correctly comes back all Apple — and the wrong shape for one that names
+    several, which wants `retrieve_per_ticker` or `retrieve_grid`.
 
-    Steps, in order:
-      1. `embed_texts([question])` — one call, one vector.
-      2. `vector_search` and `text_search`, each at `_arm_limit(limit)`.
-      3. `fuse({"vector": ..., "text": ...}, limit=limit, k=k)`.
-      4. `hydrate` the survivors, once, for all of them.
-      5. If `with_context`, widen each chunk with `neighbours`.
-
-    Run the two arms concurrently with `asyncio.gather`. They are independent
-    queries against the same session — check that works before relying on it,
-    because an AsyncSession is not safe for concurrent use and may need two.
+    The embedding and the lexical query overlap rather than running in
+    sequence, which is worth more than it looks: the embedding is a network
+    call an order of magnitude slower than the database. `asyncio.gather` over
+    the two *searches* is the obvious move and the wrong one — an AsyncSession
+    is not safe for concurrent use, and the two arms would need two sessions to
+    buy back a few milliseconds of local query time.
 
     A question with no lexical signal at all ("what about it") yields a NULL
     tsquery and an empty text arm. That is not an error: fusion over one arm is
