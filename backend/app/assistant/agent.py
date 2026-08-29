@@ -38,6 +38,14 @@ from app.retrieval.retriever import (
 # question 1 asks only about Apple and its top-10 is all Apple, all on topic.
 DEFAULT_SEARCH_LIMIT = settings.retrieval_top_k
 
+# Roughly how many passages a grid should return in total, whatever its shape.
+# retrieve_grid's own DEFAULT_PER_CELL is 1, which is right for the 5x5 the
+# brief's comparative questions have — 25 passages, ~15,000 tokens — and does
+# not scale down: measured, one company in one year routed here and came back
+# with a single passage, where retrieve() would have given ten. Depth per cell
+# is therefore derived from the number of cells rather than fixed.
+GRID_TARGET_PASSAGES = 25
+
 # Duplicated from instructions.md so a rejection and the prompt cannot disagree
 # about what exists; querying it per tool call would be a request-path round trip
 # for something that changes between ingestions, not between turns. A
@@ -143,7 +151,13 @@ async def search_filings(
     session = ctx.deps.session
 
     if scope and span:
-        retrieved = await retrieve_grid(session, question, tickers=scope, years=span)
+        retrieved = await retrieve_grid(
+            session,
+            question,
+            tickers=scope,
+            years=span,
+            per_cell=_per_cell(len(scope) * len(span)),
+        )
     elif scope:
         retrieved = await retrieve_per_ticker(session, question, scope)
     elif span:
@@ -168,6 +182,17 @@ async def search_filings(
             f"{exceeded} Search again for fewer companies or fewer years, or "
             f"answer from the passages you already have."
         ) from exceeded
+
+
+def _per_cell(cells: int) -> int:
+    """Grid depth per cell, so a small grid is not starved by a big grid's budget.
+
+    Capped at DEFAULT_SEARCH_LIMIT because a one-cell grid is `retrieve` with a
+    filter, and it should return what `retrieve` returns rather than the whole
+    grid budget spent on a single filing. Floored at 1 so a 25-cell grid still
+    gets a passage per cell, which is the coverage the grid exists for.
+    """
+    return max(1, min(DEFAULT_SEARCH_LIMIT, GRID_TARGET_PASSAGES // cells))
 
 
 def _validate_tickers(tickers: list[str] | None) -> list[str]:
