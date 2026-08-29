@@ -46,6 +46,15 @@ class SourcePassage(BaseModel):
         default=None,
         description="The Item this passage came from, e.g. 'Item 1A. Risk Factors'.",
     )
+    title: str | None = Field(
+        default=None,
+        description=(
+            "For a table, the caption naming what it shows and usually its "
+            "scale — 'Unconditional Purchase Obligations', '(in millions)'. The "
+            "table body is the grid alone, so read what the figures are, and "
+            "what they are counted in, from here."
+        ),
+    )
     text: str
 
     # Identity, for the backend. Excluded from serialisation, not from the
