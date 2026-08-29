@@ -669,9 +669,16 @@ async def grid_search(
 # a single ranked list with chunks and tables interleaved. Two lists reach
 # fusion, not four.
 #
-# Each branch takes its own top-`limit` before the outer LIMIT, so a table can
-# never be crowded out by prose scoring marginally higher — both source types
-# always get a fair look, without fusion needing to know they exist.
+# The per-branch LIMIT is an optimisation, not a fairness guarantee. It bounds
+# what the union materialises; it cannot change which rows survive, because any
+# row in the global top-k is also in its own branch's top-k. Dropping it returns
+# exactly the same results, more slowly.
+#
+# So a search genuinely can come back all one type, and that is the ranking
+# working: "supplier concentration risk" is ten chunks at limit=10, "Apple net
+# sales by category" is ten tables. Neither is crowded out — the question simply
+# has one kind of answer. A caller that needs both regardless has to ask for
+# both, with `source_types`, or ask deeper.
 #
 # What this does *not* solve, and fusion must: a single top-10 over the whole
 # corpus can legitimately be ten NVDA chunks. That is right for "what did NVIDIA
