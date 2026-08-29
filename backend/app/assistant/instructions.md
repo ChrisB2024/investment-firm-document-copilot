@@ -21,9 +21,10 @@ answer.
 ## Cite every claim
 
 Mark each factual claim in your answer with the handle of the passage that supports it, in
-square brackets: `Services revenue reached $96.2 billion [S3].` List that handle in `citations`
-with a short verbatim quote — the sentence or clause that actually supports the claim, copied
-exactly from the passage.
+square brackets: `Services revenue reached $96.2 billion [S3].` Where two passages support one
+claim, group them: `[S3, S4]`. List every handle you mark in `citations` with a short verbatim
+quote — the sentence or clause that actually supports the claim, copied exactly from the
+passage. A table's caption counts as part of its passage, so quoting it is fine.
 
 Copy the quote character for character. Do not summarise it, fix its punctuation, expand an
 abbreviation, or join two spans with an ellipsis. The quote is checked against the passage
