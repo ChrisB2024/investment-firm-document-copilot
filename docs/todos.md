@@ -200,10 +200,13 @@ Goal: given a question, the right passages come back — provable before any LLM
 - [x] `grid_search` + `retrieve_grid` — one statement covering the (ticker, fiscal_year) grid.
       `row_number() over (partition by ticker, fiscal_year)` per arm over a pool CTE unioning both
       source types, so every company-year gets its own top-k. A 5×5 grid at depth 10 is 151 ms.
-- [ ] Tests: RRF ordering with known inputs, filter application, empty-result handling. Worth
-      adding a fourth the original list did not name — `_interleave`'s balance under truncation.
-      It has already been wrong once, it is a pure function over known input, and the failure is
-      invisible unless something cuts the list.
+- [x] Tests: 47 across four files — RRF ordering, filter application, empty-result handling, and
+      a fourth the original list did not name: `_interleave`'s balance under truncation, checked at
+      every cut from 1 to 25. Mutation-tested like Phase 2, which found one real gap: dropping the
+      upper-case from `retrieve_per_ticker`'s scope broke nothing, because `Filters` normalises too
+      — so `("aapl", "AAPL")` still scoped both arms to AAPL and the only casualty was dedup,
+      returning every passage twice. A duplicate a caller cannot tell from two similar passages,
+      and one a model reads as corroboration.
 
 ### What the ten questions showed
 
@@ -285,16 +288,65 @@ cheap to re-check, and the tests above are what stop it regressing.
 
 Goal: a typed answer that cannot cite what wasn't retrieved.
 
-- [ ] `app/assistant/outputs.py` — `GroundedAnswer`, `Citation`, `SourcePassage`.
-- [ ] `app/assistant/deps.py` — `DocumentAgentDeps` (user id, thread id, retriever, validator).
-- [ ] `app/assistant/instructions.md` — the product contract: answer only from retrieved passages,
-      cite every factual claim, say plainly when the corpus doesn't support an answer, no investment
-      advice.
-- [ ] `app/assistant/agent.py` — PydanticAI agent with tools `search_filings`, `read_chunk`,
-      `read_surrounding_chunks`. No agent-authored SQL.
-- [ ] `app/grounding/validator.py` — every citation resolves to a chunk retrieved this turn;
-      violation = controlled failure, never a polished unsourced answer.
-- [ ] Tests: validator rejects fabricated chunk ids; a no-evidence question yields the refusal path.
+Scaffolded. Four decisions the scaffold makes, each departing from the sketch in
+[architecture.md](architecture.md) for a stated reason:
+
+- **The model cites by turn-scoped handle, not by row id.** `deps.offer()` mints `S1`, `S2`, … as
+  it records passages in the turn's ledger. "Cannot cite what wasn't retrieved" then holds by
+  construction rather than by a lookup: a fabricated handle resolves to nothing, and so does one
+  from a previous turn. It is also 2 characters against a UUID's 36, paid 25 times on a grid call.
+- **Citations carry a verbatim quote, and it is checked.** "The citation resolves to a retrieved
+  passage" and "the passage actually says this" are different guarantees, and only the second is
+  what Driftwood is buying — *cited a real passage that doesn't say this* is what a fluent model
+  actually produces. A span is mechanically checkable against the ledger; a paraphrase is not.
+- **Refusal is a type.** `output_type=[GroundedAnswer, InsufficientEvidence]` rather than an answer
+  with an empty citation list, so the validator's "an answer cites at least one passage" has no
+  exception to carve out. `GroundedAnswer.limitations` covers the partial case, which is what
+  question 10 actually is: the filings disclose AI capex and they disclose margins, and they do not
+  connect the two.
+- **Two tools, not three.** `read_chunk` is dropped: `search_filings` returns full passage text, so
+  a tool to fetch text the model is already holding has nothing to do. It would earn its place if
+  search returned snippets (a grid at 220 chars is ~2k tokens against ~15k) — but a comparative
+  question would then need 25 follow-up reads against a request limit of 20.
+
+- [x] `app/assistant/outputs.py` — `SourcePassage`, `Citation`, `GroundedAnswer`,
+      `InsufficientEvidence`, `ValidatedAnswer`. Passage text travels one way: built by a tool,
+      never parsed back off the model. architecture.md's `GroundedAnswer.cited_passages` would have
+      the model echo passages into its own output — wasted output tokens, and the one place a
+      hallucination could enter the text the analyst clicks to verify.
+- [x] `app/assistant/deps.py` — `DocumentAgentDeps` (session, user id, thread id, ledger).
+      Deliberately *not* holding a retriever or a validator: both are module-level functions with
+      no state to configure, and passing a function through a dataclass to get DI is the "framework
+      where a function would do" case ../CLAUDE.md rules out.
+- [x] `app/assistant/instructions.md` — the product contract, written rather than stubbed.
+- [x] `app/assistant/agent.py` — agent + `search_filings` + `read_surrounding_chunks`, no
+      agent-authored SQL. The search strategy is derived from the arguments, not chosen by the
+      model: `tickers` + `years` → `retrieve_grid`, `tickers` → `retrieve_per_ticker`, neither →
+      `retrieve`. Which company-years a question is about is reading comprehension; which of the
+      three serves that shape was measured in Phase 3. Verified: pydantic-ai builds the tool schema
+      from the summary and the `Args:` block and drops everything after `Returns:`, so the
+      implementation notes below the `---` are invisible to the model.
+- [x] `app/grounding/validator.py` — three rules, scaffolded: handle was offered this turn, quote
+      appears verbatim in that passage, prose markers and the citation list agree. What it
+      deliberately does not check is whether the quote *supports* the claim — that is a judgement,
+      and it is why the passage is one click away in the UI.
+- [ ] Fill in the bodies: `offer`/`resolve`, the two tools, `validate`, and the model construction
+      (explicit `OpenAIChatModel` + `OpenAIProvider` — the string form reads `OPENAI_API_KEY` from
+      `os.environ`, which ../CLAUDE.md puts behind `app.config`).
+- [ ] Tests: validator rejects a fabricated handle, a stale one from a previous turn, and a quote
+      that is not in its passage; a no-evidence question yields the refusal path.
+
+Two gaps found while scaffolding, both cheap now and expensive in Phase 5:
+
+- **`hydrate` does not return what a citation record needs.** `Passage` carries ticker,
+  fiscal_year, form and title; `message_citations` requires `filing_date`, `company_name`, `page`
+  and `section`. A chunk's section is a column and a table's is `table_data->>'section'`, and
+  neither is selected. Four columns added to the two SELECT branches now, or a second query per
+  citation later.
+- **`message_citations` cannot hold a table citation.** `chunk_id` is a NOT NULL foreign key to
+  `document_chunks`, and 46% of a filing's figures appear only in a table — so the brief's numeric
+  questions (1, 2, 8) will cite rows the citation table cannot reference. Wants a nullable
+  `table_id` with a CHECK that exactly one is set, which is a migration.
 
 **Done when:** brief question 10 ("does the corpus prove gen-AI improved margins?") produces a
 refusal, and questions 1–9 produce answers whose citations all validate.
