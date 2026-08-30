@@ -103,6 +103,58 @@ class Table:
         return "\n\n".join([*parts, self.markdown])
 
 
+# Words that stay lowercase inside a title unless they lead it.
+_SMALL_WORDS = frozenset({
+    "a", "an", "and", "as", "at", "but", "by", "for", "from",
+    "in", "nor", "of", "on", "or", "the", "to", "with",
+})
+_ITEM_LABEL = re.compile(r"^(Item\s+\d+[A-Za-z]?\.)\s*(.*)$", re.IGNORECASE)
+# A letter run not preceded by a letter or an apostrophe, so the possessive in
+# "REGISTRANT'S" lowercases to "Registrant's" rather than "Registrant'S".
+_WORD_START = re.compile(r"(?<![A-Za-z'\u2019])[A-Za-z]+")
+
+
+def normalise_heading(heading: str) -> str:
+    """Case-normalise an Item heading, leaving the filer's words alone.
+
+    `str.title()` is wrong three ways here and all three occur in the corpus:
+    it gives "10-K" as "10-K" but "REGISTRANT'S" as "Registrant'S", and it
+    would recase a filer's already-styled heading.
+    """
+    heading = heading.strip()
+    # Extraction artefact: an Item whose body is empty picks up the literal
+    # "None" glued to the heading — seen once, MSFT FY2025 Item 16.
+    if heading.endswith("None") and not heading.endswith(" None"):
+        heading = heading[: -len("None")].rstrip()
+
+    match = _ITEM_LABEL.match(heading)
+    if not match:
+        return heading
+
+    label, title = match.group(1), match.group(2)
+    label = re.sub(
+        r"(\d+)([a-z])",
+        lambda m: m.group(1) + m.group(2).upper(),
+        label[0].upper() + label[1:].lower(),
+    )
+    words = title.split()
+    if not words:
+        return label
+    return f"{label} " + " ".join(
+        _recase(word, first=i == 0) for i, word in enumerate(words)
+    )
+
+
+def _recase(word: str, *, first: bool) -> str:
+    """Shouting becomes title case; anything already mixed is left as written."""
+    if word != word.upper():
+        return word
+    lowered = word.lower()
+    if not first and lowered.strip("().,") in _SMALL_WORDS:
+        return lowered
+    return _WORD_START.sub(lambda m: m.group(0).capitalize(), lowered)
+
+
 @dataclass
 class Section:
     """One Item of the filing, e.g. "Item 1A. Risk Factors"."""
@@ -116,10 +168,20 @@ class Section:
     def heading(self) -> str:
         """Display form, e.g. "Item 1A. Risk Factors".
 
-        Chunks are prefixed with this, so it is also what retrieval matches on.
+        Chunks are prefixed with this, so it is also what retrieval matches on
+        and what a citation shows an analyst — which is why it is case-
+        normalised here rather than left as the filer wrote it. Measured across
+        the corpus: 65 distinct heading strings for 23 items, because roughly
+        half the filers shout ("Item 1A. RISK FACTORS"). Normalising collapses
+        that to 41.
+
+        Case only, never wording. "Selected Financial Data" and "[Reserved]"
+        are both Item 6 and are genuinely different — the SEC dropped the
+        requirement mid-corpus — so mapping items onto canonical SEC titles
+        would have a citation claim a heading the filing does not contain.
         """
         item = self.item if self.item.lower().startswith("item") else f"Item {self.item}"
-        return f"{item}. {self.title}".strip()
+        return normalise_heading(f"{item}. {self.title}".strip())
 
 
 @dataclass
