@@ -16,9 +16,12 @@ from pathlib import Path
 from uuid import UUID
 
 import pytest
+from sqlalchemy import func, select
 
 from app.assistant.deps import DocumentAgentDeps
 from app.assistant.outputs import Citation, GroundedAnswer, SourcePassage
+from app.database.models import SourceDocument
+from app.database.session import dispose, engine, session
 from app.retrieval.queries import Passage, SourceType
 from app.retrieval.retriever import RetrievedPassage
 
@@ -58,6 +61,47 @@ def corpus_filing():
                 return path
         pytest.skip(f"no {ticker} FY{fiscal_year} filing in manifest")
     return _path
+
+
+# Enough of the corpus that a partition has something to partition. Retrieval
+# tests assert on shape — every company covered, every year present — which is
+# meaningless against two filings, and so is an agent answer built from them.
+MIN_DOCUMENTS = 25
+
+
+@pytest.fixture
+async def corpus():
+    """A read-only session over the ingested corpus, or skip.
+
+    At root scope for the same reason the assistant fixtures below are: the
+    retrieval tests and the agent's two integration tests both need a session
+    over the real corpus, and pytest resolves fixtures per directory.
+
+    The schema existing is not the same as the corpus existing. A fresh clone
+    that has run migrations but not ingestion has every table and no rows, and
+    a retrieval suite failing there says nothing about the code — so count the
+    documents first and skip with the command that fixes it.
+
+    Nothing here writes, so unlike `db` in test_persist.py there is nothing to
+    roll back. The engine is still disposed and its cache cleared: `engine()`
+    is process-wide and cached while pytest-asyncio gives each test its own
+    event loop, so a pooled connection opened in one test fails in the next
+    rather than where the mistake was.
+    """
+    try:
+        async with session() as connection:
+            documents = await connection.scalar(
+                select(func.count()).select_from(SourceDocument)
+            )
+            if documents < MIN_DOCUMENTS:
+                pytest.skip(
+                    f"corpus has {documents} documents, needs at least "
+                    f"{MIN_DOCUMENTS}; run `uv run python -m ingest.run`"
+                )
+            yield connection
+    finally:
+        await dispose()
+        engine.cache_clear()
 
 
 @pytest.fixture
