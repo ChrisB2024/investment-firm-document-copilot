@@ -338,10 +338,29 @@ Scaffolded. Four decisions the scaffold makes, each departing from the sketch in
       this one asks what the agent did with them, and the reports share no shape. Prints the tool
       trace (retries included), the answer, every citation with its quote, and the offered-vs-cited
       ratio.
-- [ ] Tests: 31 scaffolded across `tests/grounding/test_validator.py`, `tests/assistant/test_deps.py`
-      and `tests/assistant/test_agent.py`, all failing. The four shared fixtures moved to
-      `tests/conftest.py` because pytest resolves fixtures per directory and both packages need
-      them — the mechanism forcing it, not a third caller.
+- [x] Tests: 33 across `tests/grounding/test_validator.py`, `tests/assistant/test_deps.py` and
+      `tests/assistant/test_agent.py`. The shared fixtures live in `tests/conftest.py` because
+      pytest resolves fixtures per directory and both packages need them — the mechanism forcing
+      it, not a third caller. Every rule mutation-tested; 11 of 12 mutations were caught on the
+      first pass and the survivor is recorded below.
+
+Two integration tests execute paths the brief never reached: `InsufficientEvidence` (a company
+named in the prose rather than passed as a ticker, so it arrives as a retrieval result of nothing
+rather than as the ticker guard's retry) and a tripwire under the quote floor `_supports` still
+does not have. Two more pin things that carried long comments and no coverage — the
+`retries={"output": 1}` budget, driven through the real agent via `override()` so it pins the
+configured value rather than a copy, and `CORPUS_TICKERS`/`CORPUS_YEARS` against
+`SELECT DISTINCT` on the corpus, which is the only thing that catches the drift `agent.py`'s own
+comment warns about.
+
+**The mutation that survived, and the bug it names.** Checking a quote against *everything
+retrieved* rather than against the passage cited passed every test in the validator file — each
+of them either held a single passage or used a quote that appeared in none, so nothing pinned
+*which* passage the words had to come from. In a five-company comparison that is Microsoft's
+sentence under Apple's handle: sourced-looking, and the analyst who clicks through lands on a
+passage that really does say those words. It is also exactly the shortcut someone reaches for
+when a legitimate citation fails on a field boundary. Now pinned by
+`test_a_quote_from_another_passage_is_rejected`.
 
 ### What the brief run showed
 
@@ -401,13 +420,60 @@ Two gaps found while scaffolding, both cheap now and expensive in Phase 5:
 
 Goal: the agent is reachable over HTTP, scoped to a signed-in user.
 
-- [ ] `app/auth/dependencies.py` — verify the Supabase bearer token, expose `get_current_user`.
-- [ ] `app/database/chats.py` — thread + message + citation persistence, always keyed to `user_id`.
-- [ ] `app/api/chat.py` — list/create threads, load messages, `POST /chat/stream`.
-- [ ] `app/chat/messages.py` — AI SDK wire format ↔ internal Pydantic models.
-- [ ] `app/chat/streaming.py` — text deltas, citation parts, typed error events.
-- [ ] `app/chat/orchestrator.py` — one turn end to end; persist only after a successful run.
-- [ ] Enforce 403 when a thread belongs to another user.
+Scaffolded. Two things found while scaffolding reorder the phase, and one of them changes what
+the streaming endpoint is.
+
+**Streaming and the grounding contract are in tension, and the contract wins.** `enforce_grounding`
+runs on the *final* output, so anything streamed before it is text nobody has checked — and if the
+gate then rejects, the analyst has already read a confident unsourced claim and the retraction
+arrives second. That is the failure this product exists to prevent, reintroduced by the transport.
+Two facts make it easy: `output_type` is a union, so the model answers by calling an output tool
+rather than emitting prose — there is no text stream to forward, only partial JSON — and the
+measured runs spend 2–5 requests mostly on retrieval, not generation. So stream *progress* (the
+tool trace, which an analyst genuinely wants: "searching AAPL, MSFT 2021–2025") and deliver the
+answer once, whole, after the gate.
+
+**The wire format has no target.** architecture.md says the browser consumes the AI SDK's UI
+message format; `frontend/package.json` has no AI SDK dependency. The v4 and v5 data-stream
+protocols differ enough that a wrong guess is a rewrite. So `streaming.py` and `messages.py` define
+a small SSE contract of our own — progress / answer / citations / error — the turn gets working end
+to end against `curl`, and Phase 6 adapts to the real client. Translating once against something
+installed beats translating twice against a guess.
+
+**Schema first — three blockers, all in `record_turn`'s TODOs:**
+
+- [ ] **`message_citations` cannot store a table citation.** `chunk_id` is `NOT NULL` referencing
+      `document_chunks`, and 46% of a filing's figures appear only in a table — brief questions 1,
+      2 and 8 produce citations the table physically cannot hold. Migration: nullable `chunk_id`,
+      new nullable `table_id`, CHECK exactly one set. Both stay real foreign keys —
+      `message_citation.py` says an unresolvable citation must be a database error, and a
+      `(source_type, row_id)` pair gives that up.
+- [ ] **The handle has nowhere to go.** `content` holds prose containing `[S3]` and nothing
+      persisted maps S3 to a row. `citation_index` cannot be it: one passage legitimately supports
+      two claims, which is two rows under one handle. Add a `handle` column rather than renumbering
+      the model's prose to fit the schema.
+- [ ] **`hydrate` does not return what a citation row needs** — `filing_date`, `company_name`,
+      `page`, `section`. Four columns on the two SELECT branches and four fields on `Passage`, or
+      an N+1 on the request path to re-fetch what the first query already had.
+
+- [x] `app/auth/dependencies.py` — `get_current_user` against Supabase's `/auth/v1/user` rather
+      than local JWT validation: holding signing keys, tracking rotation and getting `aud`/`exp`/
+      algorithm confusion right is a category of mistake that fails open. `Annotated[T, Depends]`
+      throughout, since ruff rejects a call in an argument default (B008).
+- [x] `app/database/chats.py` — every read and write takes `user_id` and filters on it in the
+      statement. Not because a caller might forget: a query that compares ownership in Python is
+      one missing `if` from serving another analyst's research, and it looks like working code.
+- [x] `app/chat/orchestrator.py` — the turn, and the streaming decision above.
+- [x] `app/chat/streaming.py`, `app/chat/messages.py` — the contract, deliberately not the envelope.
+- [x] `app/api/chat.py` — four routes, thin.
+- [ ] Fill in the bodies, once the migration lands.
+- [ ] Enforce 403 when a thread belongs to another user — and write the test that pins it, because
+      403 leaks existence where 404 does not. architecture.md says 403 and this is a 40-analyst
+      internal tool with UUID thread ids, so follow it; just make it a decision rather than an
+      accident.
+- [ ] The `public.users` row. `chat_threads.user_id` → `public.users` → `auth.users`, so an analyst
+      who signed up in Supabase but has no `public.users` row cannot create a thread, and it
+      surfaces as an integrity error on their first message rather than at sign-in.
 
 **Done when:** `curl` with a real Supabase token streams a cited answer and the thread survives a
 reload; no token gives 401.
