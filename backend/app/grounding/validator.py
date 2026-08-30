@@ -78,11 +78,14 @@ _SMART_QUOTES = str.maketrans(
 # a list of handles for the model to read.
 _ANSWER = "answer"
 
-# How much of a quote to echo back in a violation. Enough to tell two citations
-# on the same handle apart, and no more — the model is holding the full text it
-# wrote, so repeating a 2,000-character quote at it costs a retry's budget to
-# say nothing.
+# How much of a quote to echo back in a violation. A pointer into what the model
+# already wrote — the rejected output is still in its message history — rather
+# than a reproduction of it. Measured: the median real quote is 208 characters
+# and the shortest seen is 19, so this truncates almost every one, and without
+# the ellipsis the model is shown a clipped quote that reads as the whole thing
+# it wrote.
 _QUOTE_EXCERPT = 60
+_ELLIPSIS = "…"
 
 
 @dataclass
@@ -177,6 +180,8 @@ def validate(
             )
         elif not _supports(citation.quote, passage):
             excerpt = citation.quote[:_QUOTE_EXCERPT]
+            if len(citation.quote) > _QUOTE_EXCERPT:
+                excerpt += _ELLIPSIS
             violations.append(
                 Violation(
                     handle=citation.handle,
@@ -272,13 +277,11 @@ def _fold(value: str) -> str:
 
 
 def _markers(answer: str) -> list[str]:
-    """The handles marked in the answer prose, in order, with duplicates kept.
+    """The handles marked in the answer prose. A grouped "[S3, S4]" is two.
 
-    A grouped marker expands: "[S3, S4]" is two handles, in the order written.
-
-    Order and duplicates are both wanted: a handle cited twice is two claims
-    resting on one passage, and the caller may want to know that even if no rule
-    currently forbids it.
+    Order and duplicates fall out of `findall` and neither caller keeps them —
+    both dedupe on the way in. Left alone because collapsing them here would be
+    work to discard information, not because anything wants them.
     """
     return [h for group in _MARKER.findall(answer) for h in _HANDLE.findall(group)]
 
