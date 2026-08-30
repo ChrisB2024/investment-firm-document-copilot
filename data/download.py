@@ -26,6 +26,25 @@ COMPANY_CIKS = {
     "GOOGL": "0001652044",
 }
 
+# How each company writes its own name, because EDGAR does not. The submissions
+# JSON is authoritative for *identity* and unusable for display: it returns
+# "Apple Inc." and "Alphabet Inc." but also "MICROSOFT CORP", "NVIDIA CORP" and
+# "AMAZON COM INC", which is EDGAR's legacy all-caps registrant convention and
+# not a name anyone writes. Title-casing does not rescue it — that yields
+# "Amazon Com Inc".
+#
+# A citation is the product's trust surface, and one reading "MICROSOFT CORP"
+# undercuts exactly the credibility it exists to establish. Five entries for a
+# fixed curated corpus, with the SEC name as the fallback below, so adding a
+# company still works and merely looks worse until someone adds it here.
+COMPANY_NAMES = {
+    "AAPL": "Apple Inc.",
+    "MSFT": "Microsoft Corporation",
+    "NVDA": "NVIDIA Corporation",
+    "AMZN": "Amazon.com, Inc.",
+    "GOOGL": "Alphabet Inc.",
+}
+
 
 def get_json(url: str) -> dict:
     req = request.Request(
@@ -100,6 +119,9 @@ def download_filings() -> dict:
             manifest["filings"].append(
                 {
                     "ticker": ticker,
+                    # Display name if we have one, EDGAR's registrant name if
+                    # not. See COMPANY_NAMES for why the fallback is a fallback.
+                    "company_name": COMPANY_NAMES.get(ticker, submission.get("name")),
                     "cik": cik,
                     "form": filing["form"],
                     "filing_date": filing["filing_date"],

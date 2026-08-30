@@ -12,6 +12,7 @@ Two rules from backend/claude.md shape everything here:
 from __future__ import annotations
 
 import json
+from datetime import date
 from pathlib import Path
 from uuid import UUID
 
@@ -280,6 +281,9 @@ def retrieved():
                 ticker=ticker,
                 fiscal_year=fiscal_year,
                 form="10-K",
+                filing_date=date(2024, 11, 1),
+                company_name=None,
+                section=None,
             ),
             score=1 / n,
             rank=n,

@@ -30,6 +30,7 @@ from app.database.models import DocumentChunk, DocumentTable, SourceDocument
 # Manifest keys that map straight onto source_documents columns.
 _MANIFEST_COLUMNS = (
     "ticker",
+    "company_name",
     "cik",
     "form",
     "filing_date",
@@ -122,7 +123,6 @@ async def replace_chunks(session: AsyncSession, document_id: UUID, chunks: list)
                 "document_id": document_id,
                 "chunk_index": chunk.chunk_index,
                 "section": chunk.section,
-                "page": chunk.page,
                 "text": chunk.text,
                 "token_count": chunk.token_count,
                 "chunk_metadata": chunk.metadata,

@@ -24,6 +24,7 @@ from app.database.base import Base
 from app.database.constant import EMBEDDING_DIMENSIONS
 
 if TYPE_CHECKING:
+    from app.database.message_citation import MessageCitation
     from app.database.source_document import SourceDocument
 
 
@@ -88,6 +89,7 @@ class DocumentTable(Base):
     )
 
     document: Mapped[SourceDocument] = relationship(back_populates="tables")
+    citations: Mapped[list[MessageCitation]] = relationship(back_populates="table")
 
     @property
     def embed_text(self) -> str:

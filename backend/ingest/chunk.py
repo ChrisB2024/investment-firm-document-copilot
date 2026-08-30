@@ -35,7 +35,6 @@ class Chunk:
     chunk_index: int
     text: str
     token_count: int
-    page: str | None = None
     section: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     # Populated by ingest.embed. Nullable so a run that dies mid-embedding
@@ -154,7 +153,17 @@ def chunk_section(section: Section, start_index: int) -> list[Chunk]:
 
     atoms = _atomize(body, budget)
     if not atoms:
-        return [Chunk(start_index, heading, token_count(heading), None, heading or None)]
+        # Keywords, not positions: this is a seven-field dataclass, and a
+        # positional call here silently shifted `heading` into `metadata` when
+        # the unused `page` field was removed rather than failing.
+        return [
+            Chunk(
+                chunk_index=start_index,
+                text=heading,
+                token_count=token_count(heading),
+                section=heading or None,
+            )
+        ]
 
     counts = [token_count(body[a:b]) for a, b in atoms]
     chunks: list[Chunk] = []
@@ -169,7 +178,6 @@ def chunk_section(section: Section, start_index: int) -> list[Chunk]:
             chunk_index=start_index + len(chunks),
             text=text,
             token_count=token_count(text),
-            page=None,
             section=heading or None,
         ))
 

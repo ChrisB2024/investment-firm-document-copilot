@@ -13,7 +13,6 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
-    String,
     Text,
     UniqueConstraint,
     func,
@@ -64,7 +63,6 @@ class DocumentChunk(Base):
         nullable=False,
     )
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
-    page: Mapped[str | None] = mapped_column(String(64))
     section: Mapped[str | None] = mapped_column(Text)
     text: Mapped[str] = mapped_column(Text, nullable=False)
     embedding: Mapped[list[float] | None] = mapped_column(

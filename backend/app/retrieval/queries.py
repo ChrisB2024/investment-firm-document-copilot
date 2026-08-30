@@ -37,6 +37,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import date
 from typing import Literal
 from uuid import UUID
 
@@ -149,27 +150,44 @@ class Passage:
     fiscal_year: int
     form: str
 
+    # The rest of what a `message_citations` row needs, carried here because
+    # `_HYDRATE` already has the joined document row in hand. Fetching them when
+    # the citation is written instead would be a second query per citation, on
+    # the request path, for columns this statement just read.
+    filing_date: date
+    company_name: str | None
+    # For a chunk a column; for a table the section recorded in `table_data`.
+    # Also what `_supports` checks a quote against, so carrying it widens the
+    # surface a legitimate quote can come from — see grounding/validator.py.
+    section: str | None
+
 _HYDRATE = text("""
-    SELECT 'chunk'::text AS source_type,
-           c.id          AS row_id,
-           c.document_id AS document_id,
-           c.text        AS text,
-           NULL::text    AS title,
-           d.ticker      AS ticker,
-           d.fiscal_year AS fiscal_year,
-           d.form        AS form
+    SELECT 'chunk'::text  AS source_type,
+           c.id           AS row_id,
+           c.document_id  AS document_id,
+           c.text         AS text,
+           NULL::text     AS title,
+           d.ticker       AS ticker,
+           d.fiscal_year  AS fiscal_year,
+           d.form         AS form,
+           d.filing_date  AS filing_date,
+           d.company_name AS company_name,
+           c.section      AS section
       FROM document_chunks c
       JOIN source_documents d ON d.id = c.document_id
      WHERE c.id = ANY(:chunk_ids)
     UNION ALL
-    SELECT 'table'::text AS source_type,
-           t.id          AS row_id,
-           t.document_id AS document_id,
-           t.markdown    AS text,
-           t.title       AS title,
-           d.ticker      AS ticker,
-           d.fiscal_year AS fiscal_year,
-           d.form        AS form
+    SELECT 'table'::text  AS source_type,
+           t.id           AS row_id,
+           t.document_id  AS document_id,
+           t.markdown     AS text,
+           t.title        AS title,
+           d.ticker       AS ticker,
+           d.fiscal_year  AS fiscal_year,
+           d.form         AS form,
+           d.filing_date  AS filing_date,
+           d.company_name AS company_name,
+           t.table_data->>'section' AS section
       FROM document_tables t
       JOIN source_documents d ON d.id = t.document_id
      WHERE t.id = ANY(:table_ids)

@@ -10,6 +10,7 @@ from __future__ import annotations
 import itertools
 import pathlib
 import sys
+from datetime import date
 from uuid import UUID
 
 import pytest
@@ -49,6 +50,9 @@ def _result(
             ticker=ticker,
             fiscal_year=fiscal_year,
             form="10-K",
+            filing_date=date(2024, 11, 1),
+            company_name=None,
+            section=None,
         ),
         score=0.0286,
         rank=1,
@@ -247,6 +251,9 @@ def test_the_header_line_shows_both_arms():
         ticker="AAPL",
         fiscal_year=2024,
         form="10-K",
+        filing_date=date(2024, 11, 1),
+        company_name=None,
+        section=None,
     )
 
     text_only = format_passage(
@@ -299,6 +306,9 @@ def test_a_table_is_marked_and_keeps_its_markdown():
             ticker="AAPL",
             fiscal_year=2024,
             form="10-K",
+            filing_date=date(2024, 11, 1),
+            company_name=None,
+            section=None,
         ),
         score=0.0286,
         rank=1,
@@ -327,6 +337,9 @@ def test_a_table_is_marked_and_keeps_its_markdown():
             ticker="AAPL",
             fiscal_year=2024,
             form="10-K",
+            filing_date=date(2024, 11, 1),
+            company_name=None,
+            section=None,
         ),
         score=0.0286,
         rank=1,
@@ -366,6 +379,9 @@ def test_the_snippet_says_how_much_it_dropped():
             ticker="AAPL",
             fiscal_year=2024,
             form="10-K",
+            filing_date=date(2024, 11, 1),
+            company_name=None,
+            section=None,
         ),
         score=0.0286,
         rank=1,
@@ -395,6 +411,9 @@ def test_the_snippet_says_how_much_it_dropped():
             ticker="AAPL",
             fiscal_year=2024,
             form="10-K",
+            filing_date=date(2024, 11, 1),
+            company_name=None,
+            section=None,
         ),
         score=0.0286,
         rank=1,
